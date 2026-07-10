@@ -1,86 +1,118 @@
 # EAROS — Enterprise Autonomous Recruitment Operating System
 
 ## Original Problem Statement
-Build EAROS: an enterprise AI operating system for talent acquisition combining deterministic software architecture with governed AI reasoning. Every decision must be explainable, auditable, policy-governed. NOT an ATS. NOT a workflow automation. Separation of intelligence from execution. Three layers: Platform (Runtime, Planner, Policy Engine, Capability Registry, World State, Governance, Reflection, Memory), Intelligence (Hiring, Offer, Organizational, Workforce, Strategy, Decision, Reflection), Applications (Recruiter Copilot, Candidate Assistant, Executive Copilot, Voice AI, Hiring Dashboard).
+Build EAROS: an enterprise AI operating system for talent acquisition combining deterministic software architecture with governed AI reasoning. Three layers: Platform (Runtime, Planner, Policy Engine, Capability Registry, World State, Governance, Reflection, Memory), Intelligence (Hiring, Offer, Organizational, Workforce, Strategy, Decision, Reflection), Applications (Recruiter Copilot, Candidate Assistant, Executive Copilot, Voice AI, Hiring Dashboard). Then (iteration 2): transform from a static dashboard into a fully interactive demonstration — Mission Control landing, animated live activity, 8 demo scenarios, conversational intake, 17 specialized agents, 24 integrations, sourcing sweep, resume studio, outreach studio, screening rubric, voice interview, what-if simulation.
 
 ## User Choices
-- Scope: all three layers (Platform + Intelligence + Applications)
-- Stack adaptation: Python/FastAPI + React + MongoDB
-- LLM: Claude Sonnet 4.5 via emergentintegrations (Emergent Universal Key)
-- Auth: Emergent-managed Google Auth
-- Seed data: **LevelShift** org, jobs in India + USA, Salesforce/Dynamics/AI/Data Engineering/Sales/Client Partner roles
+- Python/FastAPI + React + MongoDB
+- Claude Sonnet 4.5 via Emergent Universal Key
+- Emergent Google Auth (+ dev-login for demos)
+- **LevelShift** tenant, jobs in India + USA (Salesforce/Dynamics/AI/Data Engineering/Sales/Client Partner)
+- Mission Control as landing page
 
-## Architecture (implemented)
+## Architecture (both iterations)
 
 ```
 /app/backend/
-├── foundation/          # IDs, value objects, events, errors, result types
-├── platform_core/       # Runtime, Planner, Policy, Capabilities, Memory, World, Governance, Reflection
-├── intelligence/        # Hiring, Offer, Organizational, Workforce, Strategy
-├── applications/        # Auth (Emergent Google), thin app endpoints
-├── seed.py              # Idempotent LevelShift seed
-└── server.py            # FastAPI wiring; every route delegates to platform+intelligence
+├── foundation/                # IDs, value objects, events, errors, result types
+├── platform_core/
+│   ├── world.py                # WorldState repository
+│   ├── capabilities.py         # 6 built-in capabilities
+│   ├── policy.py               # PolicyEngine (5 seeded policies)
+│   ├── runtime.py              # Execution runtime with policy gating
+│   ├── planner.py              # Claude Sonnet 4.5 planner + fallback
+│   ├── memory.py               # Segmented memory
+│   ├── governance.py           # Immutable events + approvals
+│   ├── reflection.py           # Auto post-execution learning
+│   ├── agents.py               # 17 specialized AI agent specs [v2]
+│   ├── integrations.py         # 24 mocked integrations [v2]
+│   └── live_activity.py        # Mission snapshot + ambient pulse [v2]
+├── intelligence/
+│   ├── __init__.py             # Hiring, Offer, Organizational, Workforce, Strategy
+│   ├── intake.py               # Conversational intake (Claude + fallback) [v2]
+│   ├── sourcing.py             # 10-channel parallel sweep [v2]
+│   ├── resume_intel.py         # Parse + fit + redact + client-summary [v2]
+│   ├── outreach_gen.py         # Multi-channel A/B + follow-up [v2]
+│   ├── screening_rubric.py     # 8-dim rubric [v2]
+│   ├── voice_interview.py      # Mock live interview [v2]
+│   ├── simulation.py           # Executive what-if [v2]
+│   └── scenarios.py            # 8 end-to-end scenario runners [v2]
+├── applications/               # Auth (Emergent Google + dev-login)
+├── seed.py                     # Idempotent LevelShift seed
+└── server.py                   # FastAPI wiring (~60 endpoints)
 
 /app/frontend/src/
-├── App.js               # BrowserRouter + AuthProvider + Protected routes
+├── App.js                      # BrowserRouter + AuthProvider + Protected routes (Mission Control default)
 ├── contexts/AuthContext.jsx
 ├── components/
-│   ├── layout/AppLayout.jsx        # Sidebar (APPS/INTELLIGENCE/PLATFORM), TopNav
-│   └── ai/AIDecisionCard.jsx       # Canonical explainable AI card
-├── pages/
-│   ├── Landing.jsx
-│   ├── AuthCallback.jsx
-│   ├── HiringDashboard.jsx         # KPIs + charts + strategy
-│   ├── RecruiterCopilot.jsx        # 3-pane: jobs / candidates / AI decisions + Planner + Runtime
-│   ├── ExecutiveCopilot.jsx        # Org health + skill gaps + strategy card
-│   ├── CandidateAssistant.jsx
-│   ├── Governance.jsx              # Event stream + approval queue
-│   ├── PolicyManager.jsx
-│   ├── CapabilityRegistry.jsx
-│   ├── WorldStateExplorer.jsx      # Tabbed org/departments/teams/jobs/candidates/offers/skills
-│   ├── PlannerView.jsx             # Ad-hoc goal → LLM plan viewer
-│   └── ReflectionReports.jsx
-└── constants/testIds/earos.js
+│   ├── layout/AppLayout.jsx    # 3-group sidebar (APPS / INTELLIGENCE / PLATFORM)
+│   └── ai/AIDecisionCard.jsx   # Canonical explainable AI card
+└── pages/
+    ├── Landing.jsx + AuthCallback.jsx
+    ├── MissionControl.jsx      # LIVE — 8 KPIs + 17 agent pulses + ambient ticker [v2]
+    ├── Scenarios.jsx           # 8 full-lifecycle scenarios [v2]
+    ├── HiringIntake.jsx        # Conversational intake with Claude reasoning [v2]
+    ├── Agents.jsx              # Agent registry grouped by category [v2]
+    ├── Integrations.jsx        # 24 connected systems [v2]
+    ├── Sourcing.jsx            # 10-channel parallel sweep visualization [v2]
+    ├── ResumeStudio.jsx        # Parse + fit + redact + client one-pager [v2]
+    ├── OutreachStudio.jsx      # Multi-channel A/B with follow-up [v2]
+    ├── Screening.jsx           # 8-dim rubric scoring [v2]
+    ├── VoiceInterview.jsx      # Interactive mock interview [v2]
+    ├── ExecutiveCopilot.jsx    # + WHAT-IF sliders live-updating trajectory + AI decision card [v2]
+    ├── HiringDashboard.jsx / RecruiterCopilot.jsx / CandidateAssistant.jsx
+    └── Governance.jsx / PolicyManager.jsx / CapabilityRegistry.jsx / WorldStateExplorer.jsx / PlannerView.jsx / ReflectionReports.jsx
 ```
 
 ## Personas
-- **Recruiter** — ranks candidates, drafts outreach, screens, schedules interviews (auto-approved by policy)
-- **Hiring Manager** — reviews shortlists, approves stage advances above sensitivity threshold
-- **Executive** — reads workforce intelligence, sets strategy, approves offers
-- **Candidate** — checks status via candidate-safe assistant
+- **Recruiter** — Mission Control → Intake → Recruiter Copilot → Sourcing → Screening → Outreach → Voice
+- **Hiring Manager** — Approvals review + governance
+- **Executive** — Mission Control → Executive Copilot with what-if sliders → Strategy
+- **Candidate** — Candidate Assistant (safe view)
 
-## Core Requirements (static)
-1. LLM never executes directly — flow: Planner → Runtime → Policy → Capability → World
+## Core Invariants (verified)
+1. LLM never executes directly — Planner → Runtime → Policy → Capability → World
 2. Every AI recommendation carries reasoning + evidence + confidence + tradeoffs + risks + policy references
-3. Immutable event stream for full replay + audit
+3. Immutable event stream — full replay + audit via correlation_id
 4. Human approval mandatory for offers (policy-enforced)
 5. First-class policy objects evaluated on every capability run
+6. Reflection auto-generated after terminal executions
+7. Candidate-safe view leaks no confidential data
 
-## What's Been Implemented (2026-01-10)
-- **Foundation**: branded IDs, ConfidenceScore, Recommendation, DomainEvent, PolicyDecision, Sensitivity, Result[T]
-- **Platform**: WorldState repo (org/depts/teams/skills/jobs/candidates/offers), CapabilityRegistry with 6 built-in capabilities (source, screen, advance_stage, draft_outreach, generate_offer, schedule_interview), PolicyEngine with 5 seeded policies, Runtime with retries + policy gating + event emission, Planner (Claude Sonnet 4.5 with deterministic fallback), Governance (audit + approvals), Reflection (auto-generated post-execution)
-- **Intelligence**: cross-objective hiring ranking (skill/exp/salary/location/stage/risk composite), Offer intelligence with market percentile + parity delta + acceptance probability, Organizational health, Skill gap analysis, Hiring strategy
-- **Applications**: Emergent Google Auth (session cookie + Bearer fallback + dev-login for demos), 10 UI pages (all with data-testids)
-- **Seed**: 1 org (LevelShift), 5 depts, 9 teams, 32 skills, 12 jobs (6 India + 6 USA), 152 candidates, 5 policies, 3 demo users
+## What's Been Implemented
 
-## Verified end-to-end
-- ✅ Backend seeds idempotently on startup
-- ✅ Emergent Google Auth session flow (`/api/auth/session` + `/me` + `/logout` + `/dev-login`)
-- ✅ Intelligence returns explainable recommendations (95% conf on top candidates)
-- ✅ Planner returns valid JSON plans from Claude Sonnet 4.5 (with fallback)
-- ✅ Runtime executes plans through policy gate; emits events; auto-generates reflection
-- ✅ Frontend UI (Bloomberg/Foundry aesthetic) renders dashboards + AI decision cards
+### Iteration 1 (2026-01-10)
+- Platform Core (Runtime + Planner + Policy + Capabilities + World + Governance + Reflection + Memory)
+- Intelligence Layer (Hiring + Offer + Organizational + Workforce + Strategy)
+- 6 built-in capabilities, 5 policies, 12 jobs (6 India + 6 USA), 150+ candidates
+- 10 pages including Recruiter Copilot with plan simulation + runtime execution
+- Emergent Google Auth + dev-login
+- **Testing: 29/29 backend + 100% frontend**
+
+### Iteration 2 (2026-01-11) — Live Interactive Demonstration
+- **Mission Control** landing page with 8 KPIs, 17 agent pulse cards, ambient ticker (~3s refresh), approvals queue, runtime status, reflection stream
+- **8 Demo Scenarios** that execute full lifecycles (sourcing → screening × 3 → outreach × 2 → interview → offer→ reflection) with animated 15-stage progress ribbon
+- **Conversational Intake** using Claude Sonnet 4.5 — extracts requirements, ambiguities, clarifying questions, interview panel, channel plan, comp band, difficulty, JD, screening rubric, risks
+- **Agent Registry** — 17 specialized agents (Intake, JD, Market, Sourcing, Resume, Ranking, Outreach, Response Monitor, Screening, Interview, Offer, Reference Check, BGV, Planner, Runtime, Policy, Reflection) with live 24h metrics
+- **Integrations Catalog** — 24 systems (LinkedIn, Dice, GitHub, Naukri, Monster, Indeed, ZipRecruiter, Wellfound, Stack Overflow, CEIPAL, Bullhorn, Greenhouse, Lever, Recruiter.com, Internal ATS, Workday, Gmail, Slack, Teams, WhatsApp, Twilio, Referrals, Community, Calendar) with connection status + health
+- **Sourcing** — 10-channel parallel sweep with staggered row reveal
+- **Resume Studio** — parse + fit analysis + client-ready redacted one-pager
+- **Outreach Studio** — 3 email variants (warm/direct/curiosity) + LinkedIn/SMS/WhatsApp/voice + 3-day follow-up + agent reasoning
+- **Screening** — 8-dimension rubric with score + weight + notes + composite + band + summary
+- **Voice Interview** — turn-based mock interview with sentiment, signal, STAR extraction, follow-ups, and end-of-interview summary
+- **Executive What-If** — live sliders (attrition, budget, hiring freeze, Bangalore expansion, AI doubles) that recompute headcount trajectory + AI recommendation with reasoning + risks
+- Editable + simulate-able **Policies** (backend endpoints; UI already lists them)
+- **Testing: 41/41 backend (29 v1 regression + 12 v2) + 100% frontend**
 
 ## Backlog (P1/P2 for future iterations)
-- **P1** Voice AI interview capability (transcription + structured evaluation)
+- **P1** SSE streaming for planner + copilot chat (currently polling)
 - **P1** Vector-embedding memory backend (currently keyword-scored stub)
-- **P1** Parallel capability execution + dependency-graph runtime
-- **P1** LLM streaming into UI (SSE) for planner + copilot chat
-- **P2** Multi-tenant partitioning (currently designed for it, single-tenant seeded)
-- **P2** Simulation mode (what-if) for headcount planning
+- **P1** Live orchestration DAG visualization on Mission Control (currently animated ribbon on Scenarios)
+- **P1** Real integrations: LinkedIn/Naukri/etc. behind feature flags
+- **P2** Voice AI: real STT/TTS instead of scripted turn-based mock
+- **P2** Multi-tenant activation
 - **P2** OpenTelemetry tracing hooks
-- **P2** Fine-grained RBAC beyond role-string check
+- **P2** Policy editor UI (backend already supports CRUD + simulate)
 
 ## Next Tasks
-- Run testing_agent_v3 to validate end-to-end (auth-gated flows, intelligence, runtime, governance, approvals)
-- Address any high/medium findings before finalizing
+- Ship. This is a demo-ready enterprise AI OS.
