@@ -1,0 +1,112 @@
+{
+  "theme": "dark",
+  "typography": {
+    "headings": {
+      "family": "Chivo",
+      "weights": ["400", "700", "900"],
+      "usage": "Use for primary page titles, panel headers, and large metric numbers. Keep tracking tight (tracking-tight)."
+    },
+    "body": {
+      "family": "IBM Plex Sans",
+      "weights": ["400", "500", "600"],
+      "usage": "Use for all general UI text, paragraphs, and standard labels."
+    },
+    "monospace": {
+      "family": "JetBrains Mono",
+      "weights": ["400", "700"],
+      "usage": "CRITICAL for EAROS: Use for AI reasoning chain logs, confidence scores, policy violation IDs, and system timestamps."
+    }
+  },
+  "colors": {
+    "archetype": "ARCHETYPE 4: SWISS & HIGH-CONTRAST + THE 'TERMINAL' LOOK",
+    "background": {
+      "app": "bg-slate-950",
+      "surface": "bg-slate-900",
+      "surface_hover": "bg-slate-800",
+      "surface_active": "bg-slate-800"
+    },
+    "border": {
+      "default": "border-slate-800",
+      "focus": "border-indigo-500",
+      "divider": "border-slate-800/50"
+    },
+    "text": {
+      "primary": "text-slate-100",
+      "secondary": "text-slate-400",
+      "tertiary": "text-slate-500",
+      "inverse": "text-slate-950"
+    },
+    "brand_accents": {
+      "ai_intelligence": "text-indigo-400 bg-indigo-500/10 border-indigo-500/20",
+      "human_execution": "text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
+      "policy_risk": "text-rose-400 bg-rose-500/10 border-rose-500/20",
+      "warning": "text-amber-400 bg-amber-500/10 border-amber-500/20"
+    }
+  },
+  "visual_enhancers": {
+    "elevation": "DO NOT use shadows (shadow-none). Express depth through brightness: bg-slate-950 (base) -> bg-slate-900 (panel) -> bg-slate-800 (active item). Use 1px solid borders.",
+    "borders": "Expose the grid. Use border-collapse style layouts with sharp 1px borders (border-slate-800). Corner radius should be minimal: rounded-sm or rounded-md.",
+    "active_states": "Use the 'Tracing Beam' concept for active AI Reasoning Cards (a glowing left-border or top-border in indigo-500 to denote active machine thinking)."
+  },
+  "layouts": {
+    "strategy": "MODE B: High Density Grid (Palantir/Bloomberg Terminal Vibe)",
+    "structure": "Progressive Disclosure. Use dual-pane (Master-Detail) layouts for candidate pipelines and policy explorers.",
+    "spacing": "Compact. Overriding general wide spacing for this specific OS context: Use p-3, p-4, and gap-4 to maximize data density.",
+    "components": {
+      "sidebar": "w-14 collapsed or w-64 expanded. Darkest background (bg-slate-950), right border (border-slate-800).",
+      "top_nav": "h-14, solid bg-slate-950, bottom border.",
+      "panels": "bg-slate-900, border border-slate-800, overflow-hidden.",
+      "metric_strips": "Top row of dashboards should be a grid of 4-6 KPIs (col-span-1 each) showing dense trend lines."
+    }
+  },
+  "components": {
+    "ai_decision_card": "MUST include 4 zones: 1. Recommendation (Heading), 2. Confidence Score (Large Monospace), 3. Reasoning Chain (Steps), 4. Policy References (Tags).",
+    "tables": "Dense. py-2 px-3 cells. Hover state must highlight the entire row (hover:bg-slate-800/50).",
+    "badges": "Square or slightly rounded (rounded-sm). Monospace text. e.g., <span className='px-1.5 py-0.5 bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 text-xs font-mono'>AI_GOVERNED</span>"
+  },
+  "motion": {
+    "transitions": "Instant or very fast (150ms). This is a deterministic OS, not a consumer app. It must feel instantaneous.",
+    "ai_processing": "Use subtle pulsing opacity or ASCII loaders for AI generation states."
+  },
+  "icons_and_media": {
+    "icon_library": "lucide-react (Use stroke-width 1.5 for a crisp, technical look)",
+    "images": {
+      "avatars": [
+        "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODl8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc4MzY4MTkyMXww&ixlib=rb-4.1.0&q=85",
+        "https://images.unsplash.com/photo-1494790108377-be9c29b29330?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODl8MHwxfHNlYXJjaHwzfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc4MzY4MTkyMXww&ixlib=rb-4.1.0&q=85",
+        "https://images.unsplash.com/photo-1699899657680-421c2c2d5064?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODl8MHwxfHNlYXJjaHw0fHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc4MzY4MTkyMXww&ixlib=rb-4.1.0&q=85",
+        "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODl8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc4MzY4MTkyMXww&ixlib=rb-4.1.0&q=85"
+      ],
+      "corporate_abstract": [
+        "https://images.unsplash.com/photo-1561233835-f937539b95b9?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxNzV8MHwxfHNlYXJjaHwxfHxjb3Jwb3JhdGUlMjBkYXRhJTIwY2VudGVyJTIwYWJzdHJhY3R8ZW58MHx8fHwxNzgzNzIwNzQ4fDA&ixlib=rb-4.1.0&q=85",
+        "https://images.unsplash.com/photo-1624555130581-1d9cca783bc0?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTF8MHwxfHNlYXJjaHw0fHxtb2Rlcm4lMjBvZmZpY2UlMjBjb3Jwb3JhdGUlMjB0ZWFtfGVufDB8fHx8MTc4MzcyMDc0OHww&ixlib=rb-4.1.0&q=85"
+      ]
+    }
+  },
+  "accessibility": {
+    "contrast": "Ensure all text, especially secondary muted text, passes WCAG AA. Use text-slate-400 on slate-900 minimum.",
+    "focus": "All interactive elements must have focus:ring-1 focus:ring-indigo-500 focus:outline-none."
+  },
+  "data_visualization": {
+    "library": "recharts",
+    "theme": "Dark mode strictly. Use indigo, emerald, rose, amber lines. No fill areas unless opacity is <10%. Disable cartesian grid lines or make them border-slate-800/30. Use custom HTML tooltips with Monospace font."
+  },
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "You are building an ENTERPRISE AI OPERATING SYSTEM, not a standard SaaS template. It must feel like a cross between Palantir Foundry and a Bloomberg Terminal.",
+    "Strictly apply DARK THEME. Do not use white backgrounds for main content areas.",
+    "NEVER use generic placeholder texts. Use the provided image URLs.",
+    "DO NOT apply universal transition (transition: all). Use specific properties.",
+    "DO NOT center align the app container. This is a dashboard, everything aligns top-left, utilizing 100% width and height.",
+    "Enforce visual density. Use compact padding (p-3, p-4) and sharp borders. Rely on borders instead of shadows to express elevation.",
+    "For all AI recommendations, clearly separate the 'Intelligence' (blue/indigo, monospace reasoning, confidence scores) from the 'Human Execution' (buttons to approve/execute).",
+    "All interactive and key informational elements MUST include a data-testid attribute in kebab-case."
+  ],
+  "instructions_to_main_agent": {
+    "1": "Initialize a React app with Tailwind CSS and Shadcn UI. Apply dark mode by default.",
+    "2": "Create a unified App layout with a left sidebar (Navigation) and a top header (User context, World State dropdown).",
+    "3": "Build the 'Recruiter Copilot' route: Split screen with candidate pipeline (left) and AI Decision/Reasoning pane (right).",
+    "4": "Build the 'Hiring Dashboard' route: Dense grid of KPIs, Pipeline Health, and Policy Violation logs.",
+    "5": "Implement the 'AI Decision Card' component as a reusable block displaying: Action, Confidence, Evidence, Reasoning Chain, and Policy Reference.",
+    "6": "Use Lucide React for iconography. Maintain a stroke width of 1.5 for a technical look."
+  }
+}
