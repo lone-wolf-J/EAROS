@@ -1,56 +1,142 @@
-import { useEffect } from "react";
+import React from "react";
+import {
+  BrowserRouter,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+} from "react-router-dom";
 import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import axios from "axios";
-import { HOME } from "@/constants/testIds";
+import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import Landing from "@/pages/Landing";
+import AuthCallback from "@/pages/AuthCallback";
+import HiringDashboard from "@/pages/HiringDashboard";
+import RecruiterCopilot from "@/pages/RecruiterCopilot";
+import ExecutiveCopilot from "@/pages/ExecutiveCopilot";
+import CandidateAssistant from "@/pages/CandidateAssistant";
+import Governance from "@/pages/Governance";
+import PolicyManager from "@/pages/PolicyManager";
+import CapabilityRegistry from "@/pages/CapabilityRegistry";
+import WorldStateExplorer from "@/pages/WorldStateExplorer";
+import PlannerView from "@/pages/PlannerView";
+import ReflectionReports from "@/pages/ReflectionReports";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+function Protected({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-500 flex items-center justify-center font-mono text-sm">
+        <span className="animate-pulse">Verifying session…</span>
+      </div>
+    );
+  }
+  if (!user) return <Navigate to="/" replace />;
+  return children;
+}
 
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
-
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
-
+function AppRouter() {
+  const location = useLocation();
+  // Detect OAuth callback synchronously — the URL fragment contains session_id
+  if (location.hash?.includes("session_id=")) {
+    return <AuthCallback />;
+  }
   return (
-    <div>
-      <header className="App-header">
-        <a
-          data-testid={HOME.emergentLink}
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
-    </div>
+    <Routes>
+      <Route path="/" element={<Landing />} />
+      <Route path="/auth/callback" element={<AuthCallback />} />
+      <Route
+        path="/dashboard"
+        element={
+          <Protected>
+            <HiringDashboard />
+          </Protected>
+        }
+      />
+      <Route
+        path="/recruiter"
+        element={
+          <Protected>
+            <RecruiterCopilot />
+          </Protected>
+        }
+      />
+      <Route
+        path="/executive"
+        element={
+          <Protected>
+            <ExecutiveCopilot />
+          </Protected>
+        }
+      />
+      <Route
+        path="/candidate"
+        element={
+          <Protected>
+            <CandidateAssistant />
+          </Protected>
+        }
+      />
+      <Route
+        path="/planner"
+        element={
+          <Protected>
+            <PlannerView />
+          </Protected>
+        }
+      />
+      <Route
+        path="/world"
+        element={
+          <Protected>
+            <WorldStateExplorer />
+          </Protected>
+        }
+      />
+      <Route
+        path="/capabilities"
+        element={
+          <Protected>
+            <CapabilityRegistry />
+          </Protected>
+        }
+      />
+      <Route
+        path="/policies"
+        element={
+          <Protected>
+            <PolicyManager />
+          </Protected>
+        }
+      />
+      <Route
+        path="/governance"
+        element={
+          <Protected>
+            <Governance />
+          </Protected>
+        }
+      />
+      <Route
+        path="/reflection"
+        element={
+          <Protected>
+            <ReflectionReports />
+          </Protected>
+        }
+      />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
-};
+}
 
-function App() {
+export default function App() {
   return (
     <div className="App">
       <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
-          </Route>
-        </Routes>
+        <AuthProvider>
+          <AppRouter />
+        </AuthProvider>
       </BrowserRouter>
     </div>
   );
 }
-
-export default App;
