@@ -13,6 +13,47 @@ export const EAROS = {
   demoManagerBtn: "demo-login-manager-btn",
   demoExecutiveBtn: "demo-login-executive-btn",
 
+  // Mission Control
+  missionRoot: "mission-root",
+  missionKpi: (k) => `mission-kpi-${k}`,
+  agentPulseCard: (id) => `agent-pulse-${id}`,
+  ambientTicker: "ambient-ticker",
+  runningExecutionCard: (id) => `running-exec-${id}`,
+  approvalMission: (id) => `mission-approval-${id}`,
+
+  // Scenarios
+  scenariosRoot: "scenarios-root",
+  scenarioCard: (id) => `scenario-${id}`,
+  scenarioRunBtn: (id) => `scenario-run-${id}`,
+
+  // Orchestration
+  orchestrationRoot: "orchestration-root",
+  orchestrationNode: (key) => `orch-node-${key}`,
+
+  // Intake
+  intakeRoot: "intake-root",
+  intakeBriefInput: "intake-brief-input",
+  intakeRunBtn: "intake-run-btn",
+  intakeExamples: "intake-examples",
+
+  // Agents / Integrations
+  agentsRoot: "agents-root",
+  agentCard: (id) => `agent-card-${id}`,
+  integrationsRoot: "integrations-root",
+  integrationCard: (id) => `integration-card-${id}`,
+
+  // Sourcing / Resume / Outreach / Screening / Voice
+  sourcingRoot: "sourcing-root",
+  sourcingRunBtn: "sourcing-run-btn",
+  resumeRoot: "resume-root",
+  resumeAnalyzeBtn: "resume-analyze-btn",
+  outreachRoot: "outreach-root",
+  screeningRoot: "screening-root",
+  voiceRoot: "voice-root",
+  voiceStartBtn: "voice-start-btn",
+  voiceNextBtn: "voice-next-btn",
+  voiceSummarizeBtn: "voice-summarize-btn",
+
   // Dashboard
   dashboardRoot: "dashboard-root",
   kpiCard: (k) => `kpi-${k}`,
@@ -34,6 +75,11 @@ export const EAROS = {
   strategyCard: "strategy-card",
   skillGapTable: "skill-gap-table",
   orgHealthTable: "org-health-table",
+  simulateAttritionSlider: "sim-attrition",
+  simulateHiringFreeze: "sim-freeze",
+  simulateBudget: "sim-budget",
+  simulateBangalore: "sim-bang",
+  simulateAiDoubles: "sim-ai",
 
   // Candidate Assistant
   candidateAssistantRoot: "candidate-assistant-root",
@@ -50,6 +96,7 @@ export const EAROS = {
   // Policy manager
   policyRoot: "policy-root",
   policyRow: (id) => `policy-${id}`,
+  policySimulateBtn: "policy-simulate-btn",
 
   // World state explorer
   worldRoot: "world-state-root",

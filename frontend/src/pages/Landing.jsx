@@ -39,7 +39,7 @@ export default function Landing() {
 
   const runDemo = async (email) => {
     await devLogin(email);
-    navigate("/dashboard");
+    navigate("/mission");
   };
 
   return (

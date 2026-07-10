@@ -21,12 +21,23 @@ import { EAROS } from "@/constants/testIds/earos";
 import { useAuth } from "@/contexts/AuthContext";
 
 const NAV = [
+  { key: "mission", to: "/mission", label: "Mission Control", icon: Radar, group: "APPS" },
+  { key: "scenarios", to: "/scenarios", label: "Demo Scenarios", icon: Sparkles, group: "APPS" },
+  { key: "intake", to: "/intake", label: "Hiring Intake", icon: Headphones, group: "APPS" },
   { key: "dashboard", to: "/dashboard", label: "Hiring Dashboard", icon: Gauge, group: "APPS" },
   { key: "recruiter", to: "/recruiter", label: "Recruiter Copilot", icon: Users2, group: "APPS" },
+  { key: "sourcing", to: "/sourcing", label: "Sourcing", icon: Radar, group: "APPS" },
+  { key: "resume", to: "/resume", label: "Resume Studio", icon: ScrollText, group: "APPS" },
+  { key: "outreach", to: "/outreach", label: "Outreach Studio", icon: Boxes, group: "APPS" },
+  { key: "screening", to: "/screening", label: "Screening", icon: FileWarning, group: "APPS" },
+  { key: "voice", to: "/voice", label: "Voice Interview", icon: Headphones, group: "APPS" },
   { key: "executive", to: "/executive", label: "Executive Copilot", icon: Sparkles, group: "APPS" },
   { key: "candidate", to: "/candidate", label: "Candidate Assistant", icon: Headphones, group: "APPS" },
 
   { key: "planner", to: "/planner", label: "Planner", icon: GitBranch, group: "INTELLIGENCE" },
+  { key: "agents", to: "/agents", label: "Agent Registry", icon: Cpu, group: "INTELLIGENCE" },
+  { key: "integrations", to: "/integrations", label: "Integrations", icon: Layers, group: "INTELLIGENCE" },
+
   { key: "world", to: "/world", label: "World State", icon: Building2, group: "PLATFORM" },
   { key: "capabilities", to: "/capabilities", label: "Capabilities", icon: Boxes, group: "PLATFORM" },
   { key: "policies", to: "/policies", label: "Policies", icon: FileWarning, group: "PLATFORM" },

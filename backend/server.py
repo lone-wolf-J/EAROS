@@ -42,11 +42,31 @@ from intelligence import (
     organizational_health,
     skill_gap_analysis,
 )
+from intelligence.intake import run_intake, to_recommendation as intake_to_recommendation
+from intelligence.sourcing import sourcing_sweep
+from intelligence.resume_intel import (
+    client_summary as resume_client_summary,
+    fit_analysis as resume_fit,
+    parse_resume as resume_parse,
+    redact as resume_redact,
+)
+from intelligence.outreach_gen import draft_outreach_pack
+from intelligence.screening_rubric import screen_candidate as screen_rubric
+from intelligence.voice_interview import (
+    start_interview as voice_start,
+    summarize_interview as voice_summarize,
+    turn as voice_turn,
+)
+from intelligence.simulation import simulate as sim_simulate
+from intelligence.scenarios import list_scenarios, run_scenario
+from platform_core.agents import AGENT_CATALOG, list_agents
 from platform_core.capabilities import build_default_registry
 from platform_core.governance import Governance
+from platform_core.integrations import list_integrations
+from platform_core.live_activity import mission_snapshot
 from platform_core.memory import Memory
 from platform_core.planner import Planner
-from platform_core.policy import PolicyEngine
+from platform_core.policy import Policy, PolicyContext, PolicyEngine
 from platform_core.reflection import Reflection
 from platform_core.runtime import ExecutionRecord, PlanStep, Runtime
 from platform_core.world import WorldState
@@ -452,6 +472,210 @@ async def candidate_status(candidate_id: str, user: AppUser = Depends(_current_u
             PipelineStage.WITHDRAWN: "You withdrew from this process",
         }[c.stage],
     }
+
+
+# ============================================================
+#   MISSION CONTROL — live snapshot
+# ============================================================
+
+@app.get("/api/mission/snapshot")
+async def mission(user: AppUser = Depends(_current_user)):
+    return await mission_snapshot(db, user.organization_id)
+
+
+# ============================================================
+#   AGENTS + INTEGRATIONS
+# ============================================================
+
+@app.get("/api/platform/agents")
+async def get_agents(user: AppUser = Depends(_current_user)):
+    return [a.model_dump() for a in list_agents()]
+
+
+@app.get("/api/platform/integrations")
+async def get_integrations(user: AppUser = Depends(_current_user)):
+    return [i.model_dump() for i in list_integrations()]
+
+
+# ============================================================
+#   POLICY — CRUD + simulation
+# ============================================================
+
+class PolicyUpsertRequest(BaseModel):
+    policy_id: Optional[str] = None
+    name: str
+    description: str
+    scope: str = "*"
+    applies_to_roles: list[str] = Field(default_factory=lambda: ["*"])
+    max_sensitivity: Optional[str] = None
+    min_confidence: Optional[float] = None
+    requires_human_approval: bool = False
+    enabled: bool = True
+
+
+@app.post("/api/platform/policies")
+async def upsert_policy(req: PolicyUpsertRequest, user: AppUser = Depends(_current_user)):
+    p = Policy(**{k: v for k, v in req.model_dump().items() if v is not None})
+    return (await policy_engine.upsert_policy(p)).model_dump()
+
+
+@app.delete("/api/platform/policies/{policy_id}")
+async def delete_policy(policy_id: str, user: AppUser = Depends(_current_user)):
+    await db.policies.delete_one({"policy_id": policy_id})
+    return {"ok": True}
+
+
+class PolicySimulateRequest(BaseModel):
+    capability_id: str
+    user_role: str = "recruiter"
+    confidence: float = 0.8
+    sensitivity: str = "internal"
+
+
+@app.post("/api/platform/policies/simulate")
+async def simulate_policy(req: PolicySimulateRequest, user: AppUser = Depends(_current_user)):
+    ctx = PolicyContext(
+        organization_id=user.organization_id,
+        user_id=user.user_id,
+        user_role=req.user_role,
+        capability_id=req.capability_id,
+        sensitivity=Sensitivity(req.sensitivity),
+        confidence=req.confidence,
+    )
+    result = await policy_engine.evaluate(ctx)
+    return result.model_dump()
+
+
+# ============================================================
+#   INTAKE — conversational hiring
+# ============================================================
+
+class IntakeRequest(BaseModel):
+    brief: str
+
+
+@app.post("/api/intake/analyze")
+async def intake_analyze(req: IntakeRequest, user: AppUser = Depends(_current_user)):
+    intake = await run_intake(req.brief)
+    rec = intake_to_recommendation(req.brief, intake)
+    return {"intake": intake, "recommendation": rec.model_dump()}
+
+
+# ============================================================
+#   SOURCING — parallel multi-source sweep (simulated)
+# ============================================================
+
+@app.get("/api/sourcing/sweep/{job_id}")
+async def sourcing(job_id: str, user: AppUser = Depends(_current_user)):
+    return await sourcing_sweep(world, job_id)
+
+
+# ============================================================
+#   RESUME INTELLIGENCE
+# ============================================================
+
+class ResumeRequest(BaseModel):
+    resume_text: str
+    job_id: Optional[str] = None
+    candidate_alias: Optional[str] = None
+
+
+@app.post("/api/resume/analyze")
+async def resume_analyze(req: ResumeRequest, user: AppUser = Depends(_current_user)):
+    parsed = resume_parse(req.resume_text)
+    fit = None
+    client = None
+    redacted = resume_redact(parsed)
+    if req.job_id:
+        fit = await resume_fit(world, req.job_id, parsed)
+        if fit and "error" not in fit:
+            client = resume_client_summary(parsed, fit, req.candidate_alias or "Candidate-A")
+    return {"parsed": parsed, "redacted": redacted, "fit": fit,
+            "client_summary": client}
+
+
+# ============================================================
+#   OUTREACH
+# ============================================================
+
+@app.get("/api/outreach/pack/{candidate_id}")
+async def outreach_pack(candidate_id: str, user: AppUser = Depends(_current_user)):
+    return await draft_outreach_pack(world, user.organization_id, candidate_id)
+
+
+# ============================================================
+#   SCREENING RUBRIC
+# ============================================================
+
+class RubricRequest(BaseModel):
+    candidate_id: str
+    notes: str = ""
+
+
+@app.post("/api/screening/rubric")
+async def screening_rubric(req: RubricRequest, user: AppUser = Depends(_current_user)):
+    return await screen_rubric(world, req.candidate_id, req.notes)
+
+
+# ============================================================
+#   VOICE INTERVIEW
+# ============================================================
+
+@app.get("/api/voice/plan/{candidate_id}")
+async def voice_plan(candidate_id: str, user: AppUser = Depends(_current_user)):
+    return await voice_start(world, candidate_id)
+
+
+@app.get("/api/voice/turn/{candidate_id}/{question_index}")
+async def voice_turn_ep(candidate_id: str, question_index: int,
+                        user: AppUser = Depends(_current_user)):
+    return await voice_turn(world, candidate_id, question_index)
+
+
+class VoiceSummarizeRequest(BaseModel):
+    candidate_id: str
+    turns: list[dict[str, Any]] = Field(default_factory=list)
+
+
+@app.post("/api/voice/summarize")
+async def voice_summarize_ep(req: VoiceSummarizeRequest,
+                              user: AppUser = Depends(_current_user)):
+    return await voice_summarize(world, req.candidate_id, req.turns)
+
+
+# ============================================================
+#   EXECUTIVE SIMULATION
+# ============================================================
+
+class SimRequest(BaseModel):
+    attrition_pct: float = 0.12
+    hiring_freeze: bool = False
+    budget_delta_pct: float = 0.0
+    bangalore_expansion: bool = False
+    ai_engineering_doubles: bool = False
+    horizon_months: int = 12
+
+
+@app.post("/api/simulate/what-if")
+async def what_if(req: SimRequest, user: AppUser = Depends(_current_user)):
+    return await sim_simulate(world, user.organization_id, **req.model_dump())
+
+
+# ============================================================
+#   DEMO SCENARIOS
+# ============================================================
+
+@app.get("/api/scenarios")
+async def scenarios(user: AppUser = Depends(_current_user)):
+    return list_scenarios()
+
+
+@app.post("/api/scenarios/{scenario_id}/run")
+async def run_scenario_ep(scenario_id: str, user: AppUser = Depends(_current_user)):
+    return await run_scenario(
+        scenario_id, user.organization_id, user.user_id,
+        world, runtime, policy_engine, governance, reflection,
+    )
 
 
 @app.on_event("startup")

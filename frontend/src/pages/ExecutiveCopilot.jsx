@@ -1,5 +1,14 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import useSWR from "swr";
+import {
+  Line,
+  LineChart as RechartsLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+} from "recharts";
 import { api } from "@/lib/api";
 import { EAROS } from "@/constants/testIds/earos";
 import AppLayout from "@/components/layout/AppLayout";
@@ -12,6 +21,33 @@ export default function ExecutiveCopilot() {
   const { data: gaps } = useSWR("/intelligence/workforce/skill-gaps", fetcher);
   const { data: strategy } = useSWR("/intelligence/strategy", fetcher);
 
+  const [levers, setLevers] = useState({
+    attrition_pct: 0.12,
+    hiring_freeze: false,
+    budget_delta_pct: 0.0,
+    bangalore_expansion: false,
+    ai_engineering_doubles: false,
+    horizon_months: 12,
+  });
+  const [sim, setSim] = useState(null);
+
+  const runSim = async (next) => {
+    const payload = next || levers;
+    const { data } = await api.post("/simulate/what-if", payload);
+    setSim(data);
+  };
+
+  useEffect(() => {
+    runSim(levers);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const update = (patch) => {
+    const next = { ...levers, ...patch };
+    setLevers(next);
+    runSim(next);
+  };
+
   return (
     <AppLayout>
       <div data-testid={EAROS.executiveRoot} className="p-6 space-y-6">
@@ -23,8 +59,7 @@ export default function ExecutiveCopilot() {
             Workforce Intelligence
           </h1>
           <div className="text-slate-500 text-sm">
-            Organizational health · skill gaps · strategy — all explainable, all
-            grounded in world state.
+            Organizational health · skill gaps · strategy · what-if simulation.
           </div>
         </div>
 
@@ -46,6 +81,98 @@ export default function ExecutiveCopilot() {
               </div>
             </div>
           ))}
+        </div>
+
+        {/* What-If simulator */}
+        <div className="border border-cyan-500/30 bg-cyan-500/5 rounded-md">
+          <div className="p-4 border-b border-cyan-500/20 flex items-center gap-2">
+            <div className="font-mono2 text-[10px] tracking-widest text-cyan-400">
+              WHAT-IF SIMULATION · MOVE SLIDERS
+            </div>
+            {sim && (
+              <span className="ml-auto font-mono2 text-[11px] text-slate-400">
+                {sim.starting_headcount} → {sim.ending_headcount} in {levers.horizon_months} months
+                <span className={sim.net_change >= 0 ? "text-emerald-400 ml-1" : "text-rose-400 ml-1"}>
+                  ({sim.net_change >= 0 ? "+" : ""}{sim.net_change})
+                </span>
+              </span>
+            )}
+          </div>
+          <div className="p-4 grid grid-cols-1 lg:grid-cols-[1fr_2fr] gap-4">
+            <div className="space-y-4">
+              <div>
+                <div className="font-mono2 text-[10px] tracking-widest text-slate-500 mb-1">
+                  ATTRITION · {Math.round(levers.attrition_pct * 100)}%
+                </div>
+                <input
+                  data-testid={EAROS.simulateAttritionSlider}
+                  type="range" min="0" max="30" value={levers.attrition_pct * 100}
+                  onChange={(e) => update({ attrition_pct: Number(e.target.value) / 100 })}
+                  className="w-full accent-cyan-500"
+                />
+              </div>
+              <div>
+                <div className="font-mono2 text-[10px] tracking-widest text-slate-500 mb-1">
+                  BUDGET DELTA · {levers.budget_delta_pct >= 0 ? "+" : ""}
+                  {Math.round(levers.budget_delta_pct * 100)}%
+                </div>
+                <input
+                  data-testid={EAROS.simulateBudget}
+                  type="range" min="-30" max="30" value={levers.budget_delta_pct * 100}
+                  onChange={(e) => update({ budget_delta_pct: Number(e.target.value) / 100 })}
+                  className="w-full accent-cyan-500"
+                />
+              </div>
+              <label className="flex items-center gap-2 text-[12px] text-slate-300">
+                <input
+                  data-testid={EAROS.simulateHiringFreeze}
+                  type="checkbox" checked={levers.hiring_freeze}
+                  onChange={(e) => update({ hiring_freeze: e.target.checked })}
+                  className="accent-rose-500"
+                />
+                Hiring freeze
+              </label>
+              <label className="flex items-center gap-2 text-[12px] text-slate-300">
+                <input
+                  data-testid={EAROS.simulateBangalore}
+                  type="checkbox" checked={levers.bangalore_expansion}
+                  onChange={(e) => update({ bangalore_expansion: e.target.checked })}
+                  className="accent-emerald-500"
+                />
+                Bangalore expansion
+              </label>
+              <label className="flex items-center gap-2 text-[12px] text-slate-300">
+                <input
+                  data-testid={EAROS.simulateAiDoubles}
+                  type="checkbox" checked={levers.ai_engineering_doubles}
+                  onChange={(e) => update({ ai_engineering_doubles: e.target.checked })}
+                  className="accent-violet-500"
+                />
+                AI engineering doubles
+              </label>
+            </div>
+            <div className="h-72 bg-slate-950 border border-slate-800 rounded-sm p-2">
+              <ResponsiveContainer width="100%" height="100%">
+                <RechartsLine data={sim?.trajectory || []}>
+                  <CartesianGrid stroke="#1e293b" strokeDasharray="2 4" vertical={false} />
+                  <XAxis dataKey="month"
+                          tick={{ fill: "#94a3b8", fontSize: 10, fontFamily: "JetBrains Mono" }}
+                          axisLine={{ stroke: "#334155" }} tickLine={false} />
+                  <YAxis tick={{ fill: "#94a3b8", fontSize: 10, fontFamily: "JetBrains Mono" }}
+                          axisLine={{ stroke: "#334155" }} tickLine={false} />
+                  <Tooltip contentStyle={{ background: "#020617", border: "1px solid #334155",
+                                            fontFamily: "JetBrains Mono", fontSize: 11 }} />
+                  <Line type="monotone" dataKey="headcount" stroke="#22d3ee" strokeWidth={2}
+                        dot={{ fill: "#22d3ee", r: 3 }} />
+                </RechartsLine>
+              </ResponsiveContainer>
+            </div>
+          </div>
+          {sim?.recommendation && (
+            <div className="border-t border-cyan-500/20 p-4">
+              <AIDecisionCard rec={sim.recommendation} />
+            </div>
+          )}
         </div>
 
         {/* Strategy AI card */}

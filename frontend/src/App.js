@@ -10,6 +10,9 @@ import "@/App.css";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import Landing from "@/pages/Landing";
 import AuthCallback from "@/pages/AuthCallback";
+import MissionControl from "@/pages/MissionControl";
+import Scenarios from "@/pages/Scenarios";
+import HiringIntake from "@/pages/HiringIntake";
 import HiringDashboard from "@/pages/HiringDashboard";
 import RecruiterCopilot from "@/pages/RecruiterCopilot";
 import ExecutiveCopilot from "@/pages/ExecutiveCopilot";
@@ -20,6 +23,13 @@ import CapabilityRegistry from "@/pages/CapabilityRegistry";
 import WorldStateExplorer from "@/pages/WorldStateExplorer";
 import PlannerView from "@/pages/PlannerView";
 import ReflectionReports from "@/pages/ReflectionReports";
+import Agents from "@/pages/Agents";
+import Integrations from "@/pages/Integrations";
+import Sourcing from "@/pages/Sourcing";
+import ResumeStudio from "@/pages/ResumeStudio";
+import OutreachStudio from "@/pages/OutreachStudio";
+import Screening from "@/pages/Screening";
+import VoiceInterview from "@/pages/VoiceInterview";
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -34,9 +44,31 @@ function Protected({ children }) {
   return children;
 }
 
+const ROUTES = [
+  ["/mission", MissionControl],
+  ["/scenarios", Scenarios],
+  ["/intake", HiringIntake],
+  ["/dashboard", HiringDashboard],
+  ["/recruiter", RecruiterCopilot],
+  ["/sourcing", Sourcing],
+  ["/resume", ResumeStudio],
+  ["/outreach", OutreachStudio],
+  ["/screening", Screening],
+  ["/voice", VoiceInterview],
+  ["/executive", ExecutiveCopilot],
+  ["/candidate", CandidateAssistant],
+  ["/planner", PlannerView],
+  ["/agents", Agents],
+  ["/integrations", Integrations],
+  ["/world", WorldStateExplorer],
+  ["/capabilities", CapabilityRegistry],
+  ["/policies", PolicyManager],
+  ["/governance", Governance],
+  ["/reflection", ReflectionReports],
+];
+
 function AppRouter() {
   const location = useLocation();
-  // Detect OAuth callback synchronously — the URL fragment contains session_id
   if (location.hash?.includes("session_id=")) {
     return <AuthCallback />;
   }
@@ -44,86 +76,17 @@ function AppRouter() {
     <Routes>
       <Route path="/" element={<Landing />} />
       <Route path="/auth/callback" element={<AuthCallback />} />
-      <Route
-        path="/dashboard"
-        element={
-          <Protected>
-            <HiringDashboard />
-          </Protected>
-        }
-      />
-      <Route
-        path="/recruiter"
-        element={
-          <Protected>
-            <RecruiterCopilot />
-          </Protected>
-        }
-      />
-      <Route
-        path="/executive"
-        element={
-          <Protected>
-            <ExecutiveCopilot />
-          </Protected>
-        }
-      />
-      <Route
-        path="/candidate"
-        element={
-          <Protected>
-            <CandidateAssistant />
-          </Protected>
-        }
-      />
-      <Route
-        path="/planner"
-        element={
-          <Protected>
-            <PlannerView />
-          </Protected>
-        }
-      />
-      <Route
-        path="/world"
-        element={
-          <Protected>
-            <WorldStateExplorer />
-          </Protected>
-        }
-      />
-      <Route
-        path="/capabilities"
-        element={
-          <Protected>
-            <CapabilityRegistry />
-          </Protected>
-        }
-      />
-      <Route
-        path="/policies"
-        element={
-          <Protected>
-            <PolicyManager />
-          </Protected>
-        }
-      />
-      <Route
-        path="/governance"
-        element={
-          <Protected>
-            <Governance />
-          </Protected>
-        }
-      />
-      <Route
-        path="/reflection"
-        element={
-          <Protected>
-            <ReflectionReports />
-          </Protected>
-        }
-      />
+      {ROUTES.map(([path, Comp]) => (
+        <Route
+          key={path}
+          path={path}
+          element={
+            <Protected>
+              <Comp />
+            </Protected>
+          }
+        />
+      ))}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

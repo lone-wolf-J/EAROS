@@ -26,9 +26,8 @@ export default function AuthCallback() {
           headers: { "X-Session-ID": sessionId },
         });
         await checkAuth();
-        // Clean the URL fragment then redirect
-        window.history.replaceState(null, "", "/dashboard");
-        navigate("/dashboard", { replace: true });
+        window.history.replaceState(null, "", "/mission");
+        navigate("/mission", { replace: true });
       } catch {
         navigate("/", { replace: true });
       }
