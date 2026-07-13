@@ -12,6 +12,7 @@ which enforces Policy and delegates to Capabilities.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -58,7 +59,13 @@ from intelligence.voice_interview import (
     turn as voice_turn,
 )
 from intelligence.simulation import simulate as sim_simulate
-from intelligence.scenarios import list_scenarios, run_scenario
+from intelligence.scenarios import (
+    build_scenario_steps,
+    list_scenarios,
+    run_scenario,
+    run_scenario_paced,
+)
+from intelligence.scenario_tracker import tracker as scenario_tracker
 from platform_core.agents import AGENT_CATALOG, list_agents
 from platform_core.capabilities import build_default_registry
 from platform_core.governance import Governance
@@ -673,6 +680,54 @@ async def scenarios(user: AppUser = Depends(_current_user)):
 
 @app.post("/api/scenarios/{scenario_id}/run")
 async def run_scenario_ep(scenario_id: str, user: AppUser = Depends(_current_user)):
+    """Start a paced scenario execution. Returns immediately with an
+    execution_id that the client polls via /executions/{id}/state."""
+    scenario = next(
+        (s for s in list_scenarios() if s["scenario_id"] == scenario_id), None,
+    )
+    if not scenario:
+        raise HTTPException(404, "scenario not found")
+    state = scenario_tracker.create(
+        scenario_id=scenario_id,
+        scenario_title=scenario["title"],
+        step_defs=build_scenario_steps(),
+    )
+    task = asyncio.create_task(run_scenario_paced(
+        state.execution_id, scenario_id,
+        user.organization_id, user.user_id,
+        world, runtime, policy_engine, governance, reflection,
+    ))
+    scenario_tracker.attach_task(state.execution_id, task)
+    return state.to_dict()
+
+
+@app.get("/api/scenarios/executions/{execution_id}/state")
+async def scenario_state(execution_id: str, user: AppUser = Depends(_current_user)):
+    state = scenario_tracker.get(execution_id)
+    if not state:
+        raise HTTPException(404, "execution not found")
+    return state.to_dict()
+
+
+@app.post("/api/scenarios/executions/{execution_id}/approve")
+async def scenario_approve(execution_id: str, user: AppUser = Depends(_current_user)):
+    ok = scenario_tracker.approve(execution_id)
+    if not ok:
+        raise HTTPException(400, "no pending approval on this execution")
+    return {"ok": True, "decision": "approved"}
+
+
+@app.post("/api/scenarios/executions/{execution_id}/reject")
+async def scenario_reject(execution_id: str, user: AppUser = Depends(_current_user)):
+    ok = scenario_tracker.reject(execution_id)
+    if not ok:
+        raise HTTPException(400, "no pending approval on this execution")
+    return {"ok": True, "decision": "rejected"}
+
+
+# Legacy synchronous runner kept for tests / programmatic access.
+@app.post("/api/scenarios/{scenario_id}/run-sync")
+async def run_scenario_sync_ep(scenario_id: str, user: AppUser = Depends(_current_user)):
     return await run_scenario(
         scenario_id, user.organization_id, user.user_id,
         world, runtime, policy_engine, governance, reflection,

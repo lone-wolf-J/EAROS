@@ -127,3 +127,29 @@ Build EAROS: an enterprise AI operating system for talent acquisition combining 
 
 ## Next Tasks
 - Ship. This is a demo-ready enterprise AI OS.
+
+## v2 Interactivity Build — Progress Log
+
+### 2026-02-13 — Task 1: Demo Scenarios Pacing & Visibility ✅ DONE
+- Added `intelligence/scenario_tracker.py` — in-memory ScenarioTracker with per-execution state machine (running / awaiting_approval / completed / failed) and asyncio.Event-based approval gate with 20s auto-resume timeout
+- Refactored `intelligence/scenarios.py`: new `run_scenario_paced` runs as a background task through 14 named lifecycle stages (Intake → JD Intelligence → Market Intelligence → Planner → Policy Eval → Sourcing → Resume Intel → Ranking → Outreach → Screening → Interview → Offer Prep → **Human Approval Gate (pauses)** → Reflection) with deliberate ~1.7s pacing per step
+- `server.py`: `POST /api/scenarios/{id}/run` now returns an execution_id immediately; new endpoints `GET /executions/{id}/state`, `POST /approve`, `POST /reject`; legacy sync behaviour preserved under `/run-sync` for tests
+- `frontend/src/pages/Scenarios.jsx` (full rewrite): polls state every 700ms, renders a persistent stage tracker with current-step banner, active agent label, progress bar, per-step output detail rows, and a prominent amber "HUMAN APPROVAL REQUIRED" card with live countdown + Approve/Reject buttons + open-replay/audit CTAs on completion
+- Tests: `tests/test_scenarios_paced.py` — 5 new tests (execution_id creation, full approval flow, rejection flow, 404, 400 without gate) — all passing. Existing v2/v3 tests updated to use `/run-sync`. 14/14 tests green.
+
+### P1 Backlog (from v2 prompt, in priority order)
+- Task 2 — Hiring Intake → Job Architecture branch (brief → JD → sourcing plan → recruiter hand-off link)
+- Task 3 — Hiring Dashboard KPI drill-downs (clickable tiles → detail panels)
+- Task 4 — Recruiter Copilot ops (campaigns, harvester, pipeline panel, stage transitions, semi/full autonomous toggle)
+- Task 5 — Sourcing sweep simulation (per-source counts + action plan)
+- Task 6 — Resume Studio (one-page vs client-submission)
+- Task 7 — Outreach Studio (interactive lists, templates, send)
+- Task 8 — AI Interview Suite (4 modes + context reports)
+
+### P2 Backlog
+- Task 9 — Executive Copilot data loading + what-if sliders
+- Task 10 — Candidate Assistant agent
+- Task 11 — Intelligence tab (Planner trace, Deep-Dive diagram, Registry click-details)
+
+### P3 Backlog
+- Task 12 — Platform depth (only if credits remain)

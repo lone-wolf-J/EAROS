@@ -83,7 +83,7 @@ class TestScenarios:
 
     def test_run_java_chennai(self, auth_session):
         r = auth_session.post(
-            f"{BASE_URL}/api/scenarios/scn.java_chennai/run", timeout=60
+            f"{BASE_URL}/api/scenarios/scn.java_chennai/run-sync", timeout=60
         )
         assert r.status_code == 200, r.text
         d = r.json()

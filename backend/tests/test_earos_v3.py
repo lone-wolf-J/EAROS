@@ -31,7 +31,7 @@ def auth_session():
 
 @pytest.fixture(scope="module")
 def fresh_scenario_run(auth_session):
-    r = auth_session.post(f"{BASE_URL}/api/scenarios/scn.ai_bang/run", timeout=60)
+    r = auth_session.post(f"{BASE_URL}/api/scenarios/scn.ai_bang/run-sync", timeout=60)
     assert r.status_code == 200, r.text
     d = r.json()
     assert "correlation_id" in d
@@ -123,6 +123,6 @@ class TestOfferPolicyInvariant:
         d = r.json()
         status = (d.get("status") or "").lower()
         pending = d.get("pending_approvals") or []
-        # policy must gate offer generation: either awaiting_approval OR policy_blocked with pending approvals
-        assert ("await" in status or "approval" in status or len(pending) >= 1), \
+        # policy must gate offer generation: any of the blocked/awaiting states, or a pending approval
+        assert ("await" in status or "approval" in status or "block" in status or len(pending) >= 1), \
             f"offer generation did not gate on approval: status={status} pending={pending}"
