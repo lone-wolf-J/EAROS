@@ -94,14 +94,43 @@ def build_router(db: AsyncIOMotorDatabase) -> APIRouter:
         x_session_id: str = Header(..., alias="X-Session-ID"),
     ):
         """Exchange Emergent session_id for a persistent session_token cookie."""
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(
-                AUTH_SESSION_DATA_URL,
-                headers={"X-Session-ID": x_session_id},
+        import logging
+        log = logging.getLogger("earos.auth")
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    AUTH_SESSION_DATA_URL,
+                    headers={"X-Session-ID": x_session_id},
+                )
+        except Exception as e:  # noqa: BLE001
+            log.exception("Emergent auth backend unreachable: %s", e)
+            raise HTTPException(
+                status_code=502,
+                detail=f"Emergent auth backend unreachable: {e.__class__.__name__}",
             )
         if resp.status_code != 200:
-            raise HTTPException(status_code=401, detail="Invalid session_id")
-        data = resp.json()
+            log.warning(
+                "Emergent session-data returned %s: %s",
+                resp.status_code, resp.text[:200],
+            )
+            raise HTTPException(
+                status_code=401,
+                detail=f"Emergent session invalid ({resp.status_code})",
+            )
+        try:
+            data = resp.json()
+        except Exception as e:  # noqa: BLE001
+            log.exception("Emergent session-data JSON parse failed")
+            raise HTTPException(
+                status_code=502,
+                detail=f"Emergent session-data malformed: {e.__class__.__name__}",
+            )
+        if not data.get("email"):
+            log.warning("Emergent session-data missing email: %s", str(data)[:200])
+            raise HTTPException(
+                status_code=422,
+                detail="Emergent session-data missing email",
+            )
         user = await _upsert_user(data)
         session_token = data.get("session_token") or f"tok_{os.urandom(24).hex()}"
         expires_at = datetime.now(timezone.utc) + timedelta(days=SESSION_TTL_DAYS)
