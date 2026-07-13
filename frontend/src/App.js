@@ -30,6 +30,7 @@ import ResumeStudio from "@/pages/ResumeStudio";
 import OutreachStudio from "@/pages/OutreachStudio";
 import Screening from "@/pages/Screening";
 import VoiceInterview from "@/pages/VoiceInterview";
+import DeepDive from "@/pages/DeepDive";
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -58,6 +59,7 @@ const ROUTES = [
   ["/executive", ExecutiveCopilot],
   ["/candidate", CandidateAssistant],
   ["/planner", PlannerView],
+  ["/deep-dive", DeepDive],
   ["/agents", Agents],
   ["/integrations", Integrations],
   ["/world", WorldStateExplorer],

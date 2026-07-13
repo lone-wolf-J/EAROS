@@ -60,6 +60,33 @@ export default function Governance() {
           </div>
         </div>
 
+        {/* 30-second exec explainer */}
+        <div className="border border-indigo-500/30 bg-indigo-500/5 rounded-md p-4">
+          <div className="font-mono2 text-[10px] tracking-widest text-indigo-400 mb-2">
+            GOVERNANCE IN 30 SECONDS
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-[13px] text-slate-300">
+            <div>
+              <div className="text-slate-100 font-medium mb-1">Immutability</div>
+              Every AI action writes an append-only event. Nothing can be
+              edited or deleted — including by the AI itself. Auditors get a
+              cryptographically-orderable log by design.
+            </div>
+            <div>
+              <div className="text-slate-100 font-medium mb-1">Human accountability</div>
+              Compensation, shortlists, offers, and compliance exceptions
+              cannot be finalized by the AI. Policies force those actions
+              through a human approver whose name is recorded.
+            </div>
+            <div>
+              <div className="text-slate-100 font-medium mb-1">Replayability</div>
+              Any decision can be reconstructed from its events, including
+              which policies fired, which capabilities ran, and which
+              approver said yes. Try the <span className="font-mono2 text-indigo-300">Agent Deep-Dive</span> page.
+            </div>
+          </div>
+        </div>
+
         {/* Approvals */}
         <div className="border border-slate-800 bg-slate-900 rounded-md">
           <div className="p-4 border-b border-slate-800/60 flex items-center gap-2">

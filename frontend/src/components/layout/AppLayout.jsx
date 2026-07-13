@@ -35,6 +35,7 @@ const NAV = [
   { key: "candidate", to: "/candidate", label: "Candidate Assistant", icon: Headphones, group: "APPS" },
 
   { key: "planner", to: "/planner", label: "Planner", icon: GitBranch, group: "INTELLIGENCE" },
+  { key: "deep-dive", to: "/deep-dive", label: "Agent Deep-Dive", icon: History, group: "INTELLIGENCE" },
   { key: "agents", to: "/agents", label: "Agent Registry", icon: Cpu, group: "INTELLIGENCE" },
   { key: "integrations", to: "/integrations", label: "Integrations", icon: Layers, group: "INTELLIGENCE" },
 
@@ -125,6 +126,9 @@ function TopNav() {
         <div className="font-mono2 text-[11px] text-slate-500">
           intelligence separated from execution · every decision auditable
         </div>
+        <span className="px-1.5 py-0.5 rounded-sm border border-amber-500/40 bg-amber-500/10 text-amber-300 font-mono2 text-[10px] tracking-widest">
+          DEMO · SYNTHETIC DATA
+        </span>
       </div>
       <div className="flex items-center gap-3">
         {user?.picture && (

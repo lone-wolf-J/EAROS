@@ -48,6 +48,7 @@ class Reflection:
             subject_id=r.subject_id,
             organization_id=r.organization_id,
             payload={"reflection_id": r.reflection_id, "improvements": r.improvements},
+            correlation_id=r.execution_id,
         ))
         return r
 

@@ -48,6 +48,7 @@ class PolicyContext(BaseModel):
     sensitivity: Sensitivity = Sensitivity.INTERNAL
     confidence: Optional[float] = None
     cost_estimate: float = 0.0
+    correlation_id: Optional[str] = None
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -163,7 +164,9 @@ class PolicyEngine:
                 "policies": [r.model_dump() for r in refs],
                 "confidence": ctx.confidence,
                 "sensitivity": ctx.sensitivity.value,
+                "capability_id": ctx.capability_id,
             },
+            correlation_id=ctx.correlation_id,
         ))
 
         return PolicyEvaluationResult(

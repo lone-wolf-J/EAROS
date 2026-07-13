@@ -54,6 +54,12 @@ export const EAROS = {
   voiceNextBtn: "voice-next-btn",
   voiceSummarizeBtn: "voice-summarize-btn",
 
+  // Deep Dive
+  deepDiveRoot: "deep-dive-root",
+  deepDiveExecutionRow: (id) => `deep-dive-exec-${id}`,
+  deepDivePlayBtn: "deep-dive-play-btn",
+  deepDiveMessage: (id) => `deep-dive-msg-${id}`,
+
   // Dashboard
   dashboardRoot: "dashboard-root",
   kpiCard: (k) => `kpi-${k}`,

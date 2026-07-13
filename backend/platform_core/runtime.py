@@ -125,6 +125,7 @@ class Runtime:
                     capability_id=step.capability_id,
                     sensitivity=step.sensitivity,
                     confidence=step.confidence,
+                    correlation_id=ex.correlation_id,
                     payload=step.inputs,
                 )
                 pol_result = await self.policy.evaluate(pol_ctx)
@@ -163,6 +164,7 @@ class Runtime:
                             "capability_id": step.capability_id,
                             "inputs": step.inputs,
                             "policies": [r.model_dump() for r in pol_result.policies_referenced],
+                            "correlation_id": ex.correlation_id,
                         },
                     ))
                     ex.pending_approvals.append(approval.approval_id)

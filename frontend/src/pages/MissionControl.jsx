@@ -160,28 +160,28 @@ export default function MissionControl() {
         {/* KPI strip */}
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
           <MissionKPI label="EVENTS" value={c.events_total ?? "—"}
-                       sub="immutable log" tone="indigo"
+                       sub="every AI action, immutable" tone="indigo"
                        testId={EAROS.missionKpi("events")} />
           <MissionKPI label="EXECUTIONS" value={c.executions_total ?? "—"}
-                       sub={`${c.executions_running || 0} in flight`}
+                       sub={`${c.executions_running || 0} running now`}
                        tone="cyan" testId={EAROS.missionKpi("executions")} />
           <MissionKPI label="APPROVALS" value={c.approvals_pending ?? "—"}
-                       sub="human-required" tone="amber"
+                       sub="waiting on a human" tone="amber"
                        testId={EAROS.missionKpi("approvals")} />
           <MissionKPI label="POLICIES" value={c.policies_active ?? "—"}
-                       sub="active" tone="rose"
+                       sub="rules on every action" tone="rose"
                        testId={EAROS.missionKpi("policies")} />
           <MissionKPI label="REFLECTIONS" value={c.reflections_total ?? "—"}
-                       sub="lessons banked" tone="violet"
+                       sub="lessons the AI banked" tone="violet"
                        testId={EAROS.missionKpi("reflections")} />
           <MissionKPI label="OPEN REQS" value={c.open_reqs ?? "—"}
                        sub="India + USA" tone="emerald"
                        testId={EAROS.missionKpi("open_reqs")} />
           <MissionKPI label="CANDIDATES" value={c.candidates_total ?? "—"}
-                       sub="in world state" tone="cyan"
+                       sub="people in pipeline" tone="cyan"
                        testId={EAROS.missionKpi("candidates")} />
           <MissionKPI label="AGENTS" value={data?.agent_pulse?.length ?? "—"}
-                       sub="online" tone="indigo"
+                       sub="AI workers online" tone="indigo"
                        testId={EAROS.missionKpi("agents")} />
         </div>
 

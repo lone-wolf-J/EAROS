@@ -1,0 +1,32 @@
+{
+  "summary": "EAROS iteration-3 FRONTEND validation complete. All P0 flows pass end-to-end via demo-login-executive-btn → /mission. World State: all 7 tabs (org, departments, teams, jobs, candidates, offers, skills) click through and render distinct content (ORGANIZATION card with KPI tiles NOT raw JSON; all 5 departments named; DEPARTMENT column on teams; ROLE column on candidates). Hiring Dashboard: skeleton loaders detected (animate-pulse in early HTML) and final KPIs populate with '12' present. Executive Copilot: KPI values 5, 9, 12 present after load; attrition slider triggers state update. Recruiter Copilot: approve-btn click produces toast + EXECUTION RESULT panel. Scenarios: 8 cards, run-scn.ai_bang completes with LIFECYCLE COMPLETE section (note: 'RUNNING SCENARIO' literal string not detected at ~1.5s post-click — see minor issue). Deep-Dive: root + 21 replayable executions + all 7 lane headers + play animates 7 message tiles + detail panel shows all 6 fields (ACTOR/SUBJECT/CAPABILITY/CONFIDENCE/POLICIES/PAYLOAD) with no <pre> raw-JSON blob. Governance: '30 SECONDS' explainer + 3 columns present. Integrations: amber sentence with 'simulated'+'degraded' present. Amber DEMO·SYNTHETIC DATA pill verified on /mission, /recruiter, /executive, /governance, /world, /deep-dive. Mission Control sub-labels all 6 plain-English phrases matched.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "WorldStateExplorer / Recruiter / Deep-Dive lists", "issue": "React warning 'Encountered two children with the same key' for keys dept_platform, dept_data, dept_crm, dept_sales, and job_sfdc_lead_bangalore / job_sfdc_arch_austin (appearing 10+ times). Indicates duplicate rows in a rendered list OR non-unique key derivation (e.g., using department_id/job_id when data set contains repeats). Not user-visible but risks duplicated/omitted rows on re-render.", "selector": "list rows in /world tabs (departments, jobs) and downstream references", "priority": "MEDIUM"},
+      {"component": "Scenarios page ribbon", "issue": "Literal text 'RUNNING SCENARIO' not detected at t≈1.5s after clicking scenario-run-scn.ai_bang. LIFECYCLE COMPLETE section did appear ~9s later, so run works, but pulsing 'RUNNING SCENARIO' ribbon copy may be absent, differently worded, or animates in later than expected. Please verify the exact ribbon copy renders promptly.", "selector": "top-of-page ribbon on /scenarios during active run", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "All authenticated pages", "issues": ["Two /api/auth/me 401s logged before login on landing — benign, expected probe behavior."]}
+    ]
+  },
+  "test_report_links": ["/app/test_reports/iteration_3.json"],
+  "action_items": [
+    "Deduplicate list keys in WorldStateExplorer (departments + jobs render loops) — ensure key={dept.id} maps to unique entries, or use `${id}-${index}` if duplicates are intentional. Same pattern likely repeats wherever job_sfdc_lead_bangalore is referenced.",
+    "Verify /scenarios page renders the pulsing 'RUNNING SCENARIO' ribbon copy visibly within the first second of a scenario run (currently only LIFECYCLE COMPLETE was captured)."
+  ],
+  "critical_code_review_comments": [
+    "All requested data-testids exist and behave: world-tab-*, deep-dive-root, deep-dive-exec-*, deep-dive-play-btn, deep-dive-msg-*, scenario-scn.*, scenario-run-scn.*, demo-login-executive-btn, sim-attrition, approve-btn.",
+    "Deep-Dive detail panel correctly renders payload as field-by-field UI (no <pre> element found) — matches spec.",
+    "Amber DEMO·SYNTHETIC DATA pill correctly persists in AppLayout header across all authenticated routes."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped per request)", "frontend": "95%"},
+  "test_credentials": "demo-login-executive-btn (Elena Executive) — no Google OAuth needed.",
+  "seed_data_creation": "None — used existing seeded executions and scenarios.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Frontend P0 fixes verified via headless Playwright against public URL. Only remaining polish items are (a) React duplicate-key warnings on department/job lists, and (b) scenario RUNNING ribbon copy/timing. Backend was intentionally skipped this pass (47/48 already green from iteration-2 + earlier iteration-3 backend pass).",
+  "rca of the issue": "Duplicate-key warning RCA: React console message names concrete IDs (dept_platform, dept_data, dept_crm, dept_sales, job_sfdc_lead_bangalore x16, job_sfdc_arch_austin x2). Root cause is a .map() over an array that contains the same entity twice (likely from a join/merge on the frontend such as merging teams-with-departments where the department row is emitted per team) using entity.id as the React key. Fix: either de-duplicate the source array before .map(), or use a composite key like `${dept.id}-${team.id}` where duplication is expected."
+}

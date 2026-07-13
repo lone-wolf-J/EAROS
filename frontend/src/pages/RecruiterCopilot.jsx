@@ -270,7 +270,7 @@ export default function RecruiterCopilot() {
     if (jobs && !jobId) setJobId(jobs[0]?.job_id);
   }, [jobs, jobId]);
 
-  const { data: candidates } = useSWR(
+  const { data: candidates, mutate: mutateCandidates } = useSWR(
     jobId ? `/world/jobs/${jobId}/candidates` : null,
     fetcher,
   );
@@ -280,10 +280,16 @@ export default function RecruiterCopilot() {
     setExecResult(null);
   }, [jobId]);
 
-  const { data: recs } = useSWR(
+  const { data: recs, mutate: mutateRecs } = useSWR(
     jobId ? `/intelligence/hiring/${jobId}?top_n=5` : null,
     fetcher,
   );
+
+  const [toast, setToast] = useState(null);
+  const showToast = (msg, tone = "emerald") => {
+    setToast({ msg, tone });
+    setTimeout(() => setToast(null), 4000);
+  };
 
   const selectedCandDetails = useMemo(
     () => candidates?.find((c) => c.candidate_id === selectedCand),
@@ -305,12 +311,26 @@ export default function RecruiterCopilot() {
         ],
       });
       setExecResult(data);
+      // Refresh candidate list to reflect stage change; leave recs stable so
+      // the user sees the same card they just approved rather than a new set.
+      await mutateCandidates();
+      const status = data.status;
+      if (status === "succeeded") {
+        showToast(`Executed · ${rec.action} · World State updated`, "emerald");
+      } else if (status === "awaiting_approval") {
+        showToast("Held for human approval — see Governance", "amber");
+      } else if (status === "policy_blocked") {
+        showToast(`Blocked by policy: ${data.error || "denied"}`, "rose");
+      } else {
+        showToast(`Execution ${status}`, "rose");
+      }
     } catch (e) {
       setExecResult({
         execution_id: "-",
         status: "failed",
         step_results: [{ capability_id: rec.action, ok: false, error: String(e) }],
       });
+      showToast(`Failed: ${String(e).slice(0, 80)}`, "rose");
     } finally {
       setExecuting(false);
     }
@@ -353,6 +373,15 @@ export default function RecruiterCopilot() {
 
   return (
     <AppLayout>
+      {toast && (
+        <div className={`fixed top-16 right-4 z-50 px-4 py-2.5 rounded-sm border backdrop-blur-sm font-mono2 text-[12px] shadow-lg ${
+          toast.tone === "emerald" ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-200" :
+          toast.tone === "amber" ? "bg-amber-500/20 border-amber-500/40 text-amber-200" :
+          "bg-rose-500/20 border-rose-500/40 text-rose-200"
+        }`}>
+          {toast.msg}
+        </div>
+      )}
       <div
         data-testid={EAROS.recruiterRoot}
         className="flex h-[calc(100vh-3.5rem)]"

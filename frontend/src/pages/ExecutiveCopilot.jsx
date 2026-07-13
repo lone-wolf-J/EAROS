@@ -69,16 +69,20 @@ export default function ExecutiveCopilot() {
             ["DEPARTMENTS", health?.total_departments],
             ["TEAMS", health?.total_teams],
             ["OPEN REQS", health?.total_open_reqs],
-            ["AVG ATTRITION", `${((health?.avg_attrition || 0) * 100).toFixed(1)}%`],
-            ["AVG HEALTH", `${Math.round((health?.avg_health_score || 0) * 100)}`],
+            ["AVG ATTRITION", health ? `${((health.avg_attrition || 0) * 100).toFixed(1)}%` : null],
+            ["AVG HEALTH", health ? Math.round((health.avg_health_score || 0) * 100) : null],
           ].map(([k, v]) => (
             <div key={k} className="p-4 border border-slate-800 bg-slate-900 rounded-md">
               <div className="font-mono2 text-[10px] tracking-widest text-slate-500">
                 {k}
               </div>
-              <div className="mt-2 font-display font-black text-2xl text-slate-50">
-                {v ?? "—"}
-              </div>
+              {health ? (
+                <div className="mt-2 font-display font-black text-2xl text-slate-50">
+                  {v ?? "—"}
+                </div>
+              ) : (
+                <div className="mt-2 h-7 w-14 bg-slate-800 rounded-sm animate-pulse" />
+              )}
             </div>
           ))}
         </div>

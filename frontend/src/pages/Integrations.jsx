@@ -61,7 +61,11 @@ export default function Integrations() {
           </h1>
           <div className="text-slate-500 text-sm">
             EAROS composes across your entire tool graph. All connections are
-            capability-scoped and permission-limited.
+            capability-scoped and permission-limited.{" "}
+            <span className="text-amber-400">
+              Two systems are shown in a simulated degraded state to demonstrate
+              resilience — real production wiring would connect them.
+            </span>
           </div>
         </div>
 

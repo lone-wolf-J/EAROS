@@ -70,6 +70,7 @@ class Governance:
     # approvals
     async def request_approval(self, a: Approval) -> Approval:
         await self.db.approvals.insert_one(a.model_dump())
+        corr = (a.context or {}).get("correlation_id")
         await self.emit(DomainEvent(
             event_type=EventType.APPROVAL_REQUESTED,
             actor=a.requested_by,
@@ -77,6 +78,7 @@ class Governance:
             subject_id=a.subject_id,
             organization_id=a.organization_id,
             payload={"approval_id": a.approval_id, "reason": a.reason},
+            correlation_id=corr,
         ))
         return a
 
@@ -105,6 +107,7 @@ class Governance:
         )
         approval = await self.get_approval(approval_id)
         if approval:
+            corr = (approval.context or {}).get("correlation_id")
             await self.emit(DomainEvent(
                 event_type=(
                     EventType.APPROVAL_GRANTED if decision == "granted"
@@ -115,5 +118,6 @@ class Governance:
                 subject_id=approval.subject_id,
                 organization_id=approval.organization_id,
                 payload={"approval_id": approval_id, "note": note},
+                correlation_id=corr,
             ))
         return approval

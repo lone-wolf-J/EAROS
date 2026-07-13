@@ -68,6 +68,7 @@ from platform_core.memory import Memory
 from platform_core.planner import Planner
 from platform_core.policy import Policy, PolicyContext, PolicyEngine
 from platform_core.reflection import Reflection
+from platform_core.replay import list_replayable_executions, replay_execution
 from platform_core.runtime import ExecutionRecord, PlanStep, Runtime
 from platform_core.world import WorldState
 from seed import seed_all
@@ -676,6 +677,23 @@ async def run_scenario_ep(scenario_id: str, user: AppUser = Depends(_current_use
         scenario_id, user.organization_id, user.user_id,
         world, runtime, policy_engine, governance, reflection,
     )
+
+
+# ============================================================
+#   DEEP-DIVE / REPLAY
+# ============================================================
+
+@app.get("/api/deep-dive/executions")
+async def deep_dive_list(user: AppUser = Depends(_current_user)):
+    return await list_replayable_executions(db, user.organization_id)
+
+
+@app.get("/api/deep-dive/replay/{correlation_id}")
+async def deep_dive_replay(correlation_id: str, user: AppUser = Depends(_current_user)):
+    result = await replay_execution(db, correlation_id)
+    if not result["messages"]:
+        raise HTTPException(404, "no events for this correlation id")
+    return result
 
 
 @app.on_event("startup")

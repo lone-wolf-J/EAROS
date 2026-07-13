@@ -39,7 +39,7 @@ const STAGE_COLORS = {
   withdrawn: "#475569",
 };
 
-function Kpi({ label, value, sub, testId }) {
+function Kpi({ label, value, sub, testId, loading }) {
   return (
     <div
       data-testid={testId}
@@ -48,10 +48,19 @@ function Kpi({ label, value, sub, testId }) {
       <div className="font-mono2 text-[10px] tracking-widest text-slate-500">
         {label}
       </div>
-      <div className="mt-2 font-display font-black text-3xl text-slate-50 tracking-tight leading-none">
-        {value}
-      </div>
-      {sub && <div className="mt-2 text-slate-400 text-[12px]">{sub}</div>}
+      {loading ? (
+        <>
+          <div className="mt-2 h-8 w-16 bg-slate-800 rounded-sm animate-pulse" />
+          <div className="mt-2 h-3 w-24 bg-slate-800/60 rounded-sm animate-pulse" />
+        </>
+      ) : (
+        <>
+          <div className="mt-2 font-display font-black text-3xl text-slate-50 tracking-tight leading-none">
+            {value}
+          </div>
+          {sub && <div className="mt-2 text-slate-400 text-[12px]">{sub}</div>}
+        </>
+      )}
     </div>
   );
 }
@@ -88,39 +97,33 @@ export default function HiringDashboard() {
 
         {/* KPI strip */}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-          <Kpi
+          <Kpi loading={!data}
             label="OPEN REQS"
             value={data?.kpis?.open_reqs ?? "—"}
             sub={`${data?.reqs_by_country?.India || 0} India · ${data?.reqs_by_country?.USA || 0} USA`}
-            testId={EAROS.kpiCard("open_reqs")}
-          />
-          <Kpi
+            testId={EAROS.kpiCard("open_reqs")} />
+          <Kpi loading={!data}
             label="IN PIPELINE"
             value={data?.kpis?.in_pipeline ?? "—"}
             sub={`${data?.kpis?.total_candidates ?? 0} total candidates`}
-            testId={EAROS.kpiCard("in_pipeline")}
-          />
-          <Kpi
+            testId={EAROS.kpiCard("in_pipeline")} />
+          <Kpi loading={!data}
             label="OFFERS ACTIVE"
             value={data?.kpis?.offers_active ?? "—"}
-            testId={EAROS.kpiCard("offers_active")}
-          />
-          <Kpi
+            testId={EAROS.kpiCard("offers_active")} />
+          <Kpi loading={!data}
             label="HIRED YTD"
             value={data?.kpis?.hired_ytd ?? "—"}
-            testId={EAROS.kpiCard("hired_ytd")}
-          />
-          <Kpi
+            testId={EAROS.kpiCard("hired_ytd")} />
+          <Kpi loading={!data}
             label="AVG TIME-TO-FILL"
-            value={`${data?.kpis?.avg_time_to_fill_days ?? "—"}d`}
-            testId={EAROS.kpiCard("ttf")}
-          />
-          <Kpi
+            value={data ? `${data?.kpis?.avg_time_to_fill_days ?? "—"}d` : "—"}
+            testId={EAROS.kpiCard("ttf")} />
+          <Kpi loading={!data}
             label="P0 ROLES"
             value={data?.reqs_by_priority?.P0 ?? 0}
             sub="critical priority"
-            testId={EAROS.kpiCard("p0")}
-          />
+            testId={EAROS.kpiCard("p0")} />
         </div>
 
         {/* Pipeline + charts */}
