@@ -46,7 +46,16 @@ function Table({ rows, cols, empty = "No data." }) {
           </thead>
           <tbody className="divide-y divide-slate-800/60">
             {rows.map((r, i) => (
-              <tr key={r.id || r.job_id || r.candidate_id || r.department_id || r.team_id || r.skill_id || r.offer_id || i}
+              <tr key={
+                r.candidate_id ||
+                r.offer_id ||
+                r.team_id ||
+                r.department_id ||
+                r.skill_id ||
+                r.job_id ||
+                r.id ||
+                i
+              }
                   className="hover:bg-slate-800/40">
                 {cols.map((c) => (
                   <td key={c.key} className="px-3 py-2 text-slate-200">

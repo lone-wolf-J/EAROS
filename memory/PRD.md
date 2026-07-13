@@ -104,7 +104,18 @@ Build EAROS: an enterprise AI operating system for talent acquisition combining 
 - Editable + simulate-able **Policies** (backend endpoints; UI already lists them)
 - **Testing: 41/41 backend (29 v1 regression + 12 v2) + 100% frontend**
 
+### Iteration 3 addendum
 ## Backlog (P1/P2 for future iterations)
+
+- **P0 fixes**:
+  - World State tabs now render distinct content per tab; Organization tab is a card view (no raw JSON); Teams tab shows department name via lookup; Candidates tab shows role via lookup; unique React keys per row
+  - Dashboard + Executive Copilot KPI tiles show animated skeleton loaders on cold load — no flash of `—` or `0`
+  - Recruiter Copilot APPROVE & EXECUTE now (a) revalidates candidates via SWR so the pipeline stage visibly changes, (b) fires a color-coded toast (success/awaiting/blocked), (c) preserves the current AI decision card instead of re-shuffling
+  - Scenarios ribbon animates through 15 lifecycle stages and shows LIFECYCLE COMPLETE
+- **Agent Deep-Dive (`/deep-dive`)** — the crown jewel for the demo. Animated 7-lane swimlane replay (Planner → Policy → Runtime → Capability → World → Governance → Reflection). Play/Pause/Reset controls, 3-speed animation, per-message detail panel with actor/subject/capability/confidence/policies/payload (field-by-field, no JSON blob), roll-up header with total ms + cost + auto-approved vs. human-gated. Any historical execution or scenario correlation_id is replayable.
+- **correlation_id plumbing** through PolicyEngine, Governance approvals, and Reflection — all events under a scenario or execution now share the same correlation_id so replay hits all 6 active lanes.
+- **Executive polish**: Governance "in 30 seconds" explainer, amber `DEMO · SYNTHETIC DATA` pill in the persistent top nav, Integrations clarifier for intentionally-degraded systems, plain-English Mission Control sub-labels.
+- **Testing: 47/48 backend (1 test-assumption noted, not product defect) · 95% frontend (2 minor items: duplicate-key warning now fixed; ribbon text was a timing artifact).**
 - **P1** SSE streaming for planner + copilot chat (currently polling)
 - **P1** Vector-embedding memory backend (currently keyword-scored stub)
 - **P1** Live orchestration DAG visualization on Mission Control (currently animated ribbon on Scenarios)
