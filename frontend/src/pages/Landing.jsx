@@ -36,10 +36,27 @@ const CAPSULES = [
 export default function Landing() {
   const navigate = useNavigate();
   const { devLogin } = useAuth();
+  const [demoError, setDemoError] = React.useState(null);
+  const [demoLoading, setDemoLoading] = React.useState(null);
 
   const runDemo = async (email) => {
-    await devLogin(email);
-    navigate("/mission");
+    setDemoError(null);
+    setDemoLoading(email);
+    try {
+      await devLogin(email);
+      navigate("/mission");
+    } catch (e) {
+      setDemoError({
+        email,
+        code: e.response?.status || "NETWORK",
+        detail:
+          e.response?.data?.detail ||
+          e.message ||
+          "No response from backend.",
+      });
+    } finally {
+      setDemoLoading(null);
+    }
   };
 
   return (
@@ -112,26 +129,40 @@ export default function Landing() {
               <button
                 data-testid={EAROS.demoRecruiterBtn}
                 onClick={() => runDemo("demo.recruiter@levelshift.ai")}
-                className="px-3 py-2 rounded-sm border border-slate-800 hover:border-slate-700 text-slate-300 text-[12px] font-mono2"
+                disabled={!!demoLoading}
+                className="px-3 py-2 rounded-sm border border-slate-800 hover:border-slate-700 text-slate-300 text-[12px] font-mono2 disabled:opacity-40"
               >
-                recruiter
+                {demoLoading === "demo.recruiter@levelshift.ai" ? "…" : "recruiter"}
               </button>
               <button
                 data-testid={EAROS.demoManagerBtn}
                 onClick={() => runDemo("demo.manager@levelshift.ai")}
-                className="px-3 py-2 rounded-sm border border-slate-800 hover:border-slate-700 text-slate-300 text-[12px] font-mono2"
+                disabled={!!demoLoading}
+                className="px-3 py-2 rounded-sm border border-slate-800 hover:border-slate-700 text-slate-300 text-[12px] font-mono2 disabled:opacity-40"
               >
-                hiring_manager
+                {demoLoading === "demo.manager@levelshift.ai" ? "…" : "hiring_manager"}
               </button>
               <button
                 data-testid={EAROS.demoExecutiveBtn}
                 onClick={() => runDemo("demo.executive@levelshift.ai")}
-                className="px-3 py-2 rounded-sm border border-slate-800 hover:border-slate-700 text-slate-300 text-[12px] font-mono2"
+                disabled={!!demoLoading}
+                className="px-3 py-2 rounded-sm border border-slate-800 hover:border-slate-700 text-slate-300 text-[12px] font-mono2 disabled:opacity-40"
               >
-                executive
+                {demoLoading === "demo.executive@levelshift.ai" ? "…" : "executive"}
               </button>
             </div>
           </div>
+          {demoError && (
+            <div className="mt-4 max-w-2xl border border-rose-500/40 bg-rose-500/5 rounded-md p-3">
+              <div className="font-mono2 text-[10px] tracking-widest text-rose-400 mb-1">
+                DEMO LOGIN FAILED · {demoError.code}
+              </div>
+              <div className="text-slate-200 text-[13px]">{demoError.detail}</div>
+              <div className="font-mono2 text-[10px] text-slate-500 mt-1">
+                email · {demoError.email}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="mt-20 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

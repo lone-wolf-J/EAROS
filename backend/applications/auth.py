@@ -176,13 +176,46 @@ def build_router(db: AsyncIOMotorDatabase) -> APIRouter:
         response.delete_cookie("session_token", path="/")
         return {"ok": True}
 
-    # Dev helper — get a bearer token for a demo user without going through Google
+    # Dev helper — get a bearer token for a demo user without going through Google.
+    # SELF-HEALING: for the known demo allowlist, auto-create the user on first call
+    # so fresh production deployments Just Work even if the seed hasn't run yet.
+    DEMO_ALLOWLIST = {
+        "demo.recruiter@levelshift.ai":  ("Ava Recruiter",   Role.RECRUITER.value),
+        "demo.manager@levelshift.ai":    ("Marcus Manager",  Role.HIRING_MANAGER.value),
+        "demo.executive@levelshift.ai":  ("Elena Executive", Role.EXECUTIVE.value),
+    }
+    DEMO_PICTURE = (
+        "https://images.unsplash.com/photo-1500648767791-00dcc994a43e"
+        "?crop=entropy&cs=srgb&fm=jpg&w=200"
+    )
+
     @router.post("/dev-login")
     async def dev_login(email: str, response: Response):
-        """Development-only convenience: mint a session for a seeded demo user by email."""
+        """Mint a session for a demo user. Auto-provisions from the allowlist."""
+        import logging
+        log = logging.getLogger("earos.auth")
         user_doc = await db.users.find_one({"email": email}, {"_id": 0})
         if not user_doc:
-            raise HTTPException(status_code=404, detail="Demo user not found")
+            if email not in DEMO_ALLOWLIST:
+                log.warning("dev-login rejected — not in allowlist: %s", email)
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Demo user not provisioned for {email}",
+                )
+            name, role = DEMO_ALLOWLIST[email]
+            user_doc = {
+                "user_id": new_user_id(),
+                "email": email,
+                "name": name,
+                "picture": DEMO_PICTURE,
+                "role": role,
+                "organization_id": "org_levelshift",
+                "created_at": utcnow_iso(),
+            }
+            await db.users.insert_one(user_doc)
+            log.info("dev-login auto-provisioned demo user: %s (%s)", email, role)
+            user_doc.pop("_id", None)
+
         session_token = f"dev_{os.urandom(24).hex()}"
         expires_at = datetime.now(timezone.utc) + timedelta(days=SESSION_TTL_DAYS)
         await db.user_sessions.insert_one({
