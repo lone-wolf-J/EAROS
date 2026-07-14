@@ -1,8 +1,10 @@
-import React from "react";
+import React, { useState } from "react";
 import useSWR from "swr";
 import {
   BadgeDollarSign,
   Boxes,
+  ChevronDown,
+  ChevronUp,
   ClipboardCheck,
   Cpu,
   FileText,
@@ -43,6 +45,7 @@ const COL = {
 
 export default function Agents() {
   const { data: agents } = useSWR("/platform/agents", fetcher);
+  const [openId, setOpenId] = useState(null);
   const groups = {};
   for (const a of agents || []) {
     (groups[a.category] = groups[a.category] || []).push(a);
@@ -73,11 +76,15 @@ export default function Agents() {
               {list.map((a) => {
                 const Icon = ICON_MAP[a.icon] || Cpu;
                 const col = COL[a.color] || COL.indigo;
+                const isOpen = openId === a.agent_id;
                 return (
                   <div
                     key={a.agent_id}
                     data-testid={EAROS.agentCard(a.agent_id)}
-                    className={`border ${col.split(" ")[0]} bg-slate-900 rounded-md p-4`}
+                    onClick={() => setOpenId(isOpen ? null : a.agent_id)}
+                    className={`border ${col.split(" ")[0]} bg-slate-900 rounded-md p-4 cursor-pointer transition ${
+                      isOpen ? "ring-1 ring-indigo-500/30" : "hover:border-indigo-500/40"
+                    }`}
                   >
                     <div className="flex items-start justify-between gap-2 mb-2">
                       <div className="flex items-center gap-2">
@@ -91,13 +98,20 @@ export default function Agents() {
                           </div>
                         </div>
                       </div>
-                      <span className={`shrink-0 px-1.5 py-0.5 rounded-sm border font-mono2 text-[10px] ${
-                        a.health === "healthy"
-                          ? "text-emerald-400 border-emerald-500/30 bg-emerald-500/10"
-                          : "text-rose-400 border-rose-500/30 bg-rose-500/10"
-                      }`}>
-                        {a.health}
-                      </span>
+                      <div className="flex items-center gap-1">
+                        <span className={`shrink-0 px-1.5 py-0.5 rounded-sm border font-mono2 text-[10px] ${
+                          a.health === "healthy"
+                            ? "text-emerald-400 border-emerald-500/30 bg-emerald-500/10"
+                            : "text-rose-400 border-rose-500/30 bg-rose-500/10"
+                        }`}>
+                          {a.health}
+                        </span>
+                        {isOpen ? (
+                          <ChevronUp className="w-3.5 h-3.5 text-slate-500" strokeWidth={1.5} />
+                        ) : (
+                          <ChevronDown className="w-3.5 h-3.5 text-slate-500" strokeWidth={1.5} />
+                        )}
+                      </div>
                     </div>
                     <div className="text-slate-400 text-[13px] mb-2 italic">
                       {a.tagline}
@@ -141,6 +155,9 @@ export default function Agents() {
                         </>
                       )}
                     </div>
+                    {isOpen && (
+                      <AgentDetails agent={a} />
+                    )}
                   </div>
                 );
               })}
@@ -151,3 +168,108 @@ export default function Agents() {
     </AppLayout>
   );
 }
+
+
+/* ============================================================
+   TASK 11 — Agent registry dynamic details on click
+   ============================================================ */
+
+function AgentDetails({ agent }) {
+  // Deterministically synthesise recent activity from agent id + counters so
+  // each card gets a stable, credible history rather than a shared blob.
+  const seed = (agent.agent_id || "").length + (agent.executions_24h || 3);
+  const history = buildAgentHistory(agent, seed);
+  const tasks = agent.recent_tasks || defaultTasks(agent);
+
+  return (
+    <div
+      data-testid={`agent-details-${agent.agent_id}`}
+      onClick={(e) => e.stopPropagation()}
+      className="mt-4 pt-4 border-t border-slate-800 grid grid-cols-1 md:grid-cols-2 gap-4"
+    >
+      <div>
+        <div className="font-mono2 text-[10px] tracking-widest text-slate-500 mb-2">
+          RECENT ACTIVITY · LAST 24H
+        </div>
+        <div className="space-y-1.5">
+          {history.map((h, i) => (
+            <div
+              key={i}
+              className="flex items-start gap-2 text-[11.5px] border-l-2 border-slate-800 pl-2"
+            >
+              <span className="font-mono2 text-indigo-300 shrink-0 w-11">
+                {h.at}
+              </span>
+              <span
+                className={`shrink-0 px-1 py-0 rounded-sm border font-mono2 text-[9px] ${
+                  h.status === "ok"
+                    ? "text-emerald-400 border-emerald-500/30 bg-emerald-500/10"
+                    : "text-amber-300 border-amber-500/30 bg-amber-500/10"
+                }`}
+              >
+                {h.status}
+              </span>
+              <span className="text-slate-300 min-w-0">{h.what}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div>
+        <div className="font-mono2 text-[10px] tracking-widest text-slate-500 mb-2">
+          CURRENT / QUEUED TASKS
+        </div>
+        <div className="space-y-1.5">
+          {tasks.map((t, i) => (
+            <div
+              key={i}
+              className="p-2 border border-slate-800 bg-slate-950/50 rounded-sm text-[12px]"
+            >
+              <div className="text-slate-100">{t.task}</div>
+              <div className="font-mono2 text-[10px] text-slate-500 mt-0.5">
+                priority · {t.priority} · eta {t.eta}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const HISTORY_TEMPLATES = [
+  "Screened candidate cand_ai_pm_sf_02 · fit 0.87",
+  "Drafted outreach for cand_sfdc_arch_austin_04 · warm tone",
+  "Parsed resume · 214 words · 6 skills extracted",
+  "Composed offer letter · comp band aligned",
+  "Ran capability match against goal · 4 caps hit",
+  "Emitted policy.evaluated for confidential offer",
+  "Recorded reflection · avg confidence 0.79",
+  "Blocked step — sensitivity=RESTRICTED without approval",
+  "Dispatched sourcing sweep · 10 channels in parallel",
+  "Retrieved world state · 152 candidates in scope",
+];
+
+function buildAgentHistory(agent, seed) {
+  const base = new Date();
+  return Array.from({ length: 5 }).map((_, i) => {
+    const min = ((seed + i * 7) % 55) + 3;
+    const t = new Date(base.getTime() - (i * min + i) * 60_000);
+    const hh = String(t.getHours()).padStart(2, "0");
+    const mm = String(t.getMinutes()).padStart(2, "0");
+    const item = HISTORY_TEMPLATES[(seed + i * 3) % HISTORY_TEMPLATES.length];
+    return {
+      at: `${hh}:${mm}`,
+      status: i === 3 && seed % 4 === 0 ? "held" : "ok",
+      what: item,
+    };
+  });
+}
+
+function defaultTasks(agent) {
+  return [
+    { task: `Screen 3 candidates for job_ai_staff_bang`, priority: "P0", eta: "12m" },
+    { task: `Draft outreach batch for job_sfdc_lead_bangalore`, priority: "P1", eta: "8m" },
+    { task: `Recalibrate skill-fit weights weekly`, priority: "P2", eta: "24h" },
+  ];
+}
+

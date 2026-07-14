@@ -145,18 +145,47 @@ Build EAROS: an enterprise AI operating system for talent acquisition combining 
 - `RecruiterCopilot.jsx`: now reads `?job=<job_id>` from `useSearchParams` and pre-selects that requisition — no manual scrolling to find the freshly-briefed req
 - Tests: `tests/test_intake_handoff.py` — 2 new pytest cases (Salesforce brief matches `job_sfdc_arch_austin` + sourcing plan shape; vague brief still returns a plan). 7/7 new Task-1+2 tests green.
 
-### P1 Backlog (from v2 prompt, next up)
-- Task 3 — Hiring Dashboard KPI drill-downs (clickable tiles → detail panels)
-- Task 4 — Recruiter Copilot ops (campaigns, harvester, pipeline panel, stage transitions, semi/full autonomous toggle)
-- Task 5 — Sourcing sweep simulation (per-source counts + action plan)
-- Task 6 — Resume Studio (one-page vs client-submission)
-- Task 7 — Outreach Studio (interactive lists, templates, send)
-- Task 8 — AI Interview Suite (4 modes + context reports)
+### 2026-02-14 — Tasks 3-8: Interactivity Sprint ✅ DONE
 
-### P2 Backlog
-- Task 9 — Executive Copilot data loading + what-if sliders
-- Task 10 — Candidate Assistant agent
-- Task 11 — Intelligence tab (Planner trace, Deep-Dive diagram, Registry click-details)
+**Task 3 · Dashboard KPI drill-downs**
+- `HiringDashboard.jsx`: every KPI tile (Open Reqs, In Pipeline, Offers Active, Hired YTD, Time-to-Fill, P0 Roles) is now a `<button>` that opens a right-side `DrillDownDrawer` with filtered records from `/world/jobs` or `/world/candidates`. Each row links to Recruiter Copilot with the correct `?job=` pre-selected.
 
-### P3 Backlog
-- Task 12 — Platform depth (only if credits remain)
+**Task 4 · Recruiter Copilot ops surface**
+- New backend endpoint `POST /api/world/candidates/{id}/stage` for manual stage transitions with immutable `CANDIDATE_STAGE_CHANGED` audit event emitted through `governance.emit()`
+- `RecruiterCopilot.jsx`: added `AutonomyToggle` (Manual/Semi-auto/Full-auto), `PipelineIntel` strip (Active/Avg Fit/Risk/Offers/Autonomy), `OpsToolbar` (Email/SMS/Screening/Harvester), `OpsModal` (recipient checklist, editable subject+body with `{{first_name}}` templating, paced send simulation), `StageTransition` dropdown that hits the new endpoint and refreshes candidate list, and a `candidate-detail-card` with fit score + skills row.
+
+**Task 5 · Sourcing action plan**
+- `Sourcing.jsx`: after a sweep completes, shows a "RECOMMENDED ACTION PLAN" panel with 4 executable next actions (contact top 25, AI screen top 10, retarget from top source, schedule 5 with HM), each with a capability label and navigation CTA.
+
+**Task 6 · Resume Studio format selector**
+- `ResumeStudio.jsx`: added a two-option format toggle (`one_page` vs `client_submission`). One-page = compact internal card. Client submission = full doc-style package with anonymised header, skills matrix (matched vs missing), differentiators, comp/logistics footer, PII-redacted watermark.
+
+**Task 7 · Outreach Studio operational**
+- `OutreachStudio.jsx`: candidate list turned into a searchable, multi-select recipient checklist. Every email tone has an `edit` toggle + `SEND TO N` per-variant send button. LinkedIn/SMS/WhatsApp/Voice each get their own send. Paced send with a live "sending → sent" banner.
+
+**Task 8 · AI Interview Suite (consolidated)**
+- New page `InterviewSuite.jsx` at `/interview` with a 4-mode selector (AI Screening, AI Voice, AI Copilot, Autonomous Video). Each mode has its own config inputs and a **context-specific report**: rubric bars for Screening (real backend `/screening/rubric`), transcript signals + red flags for Voice, live-scoring + AI flags + scorecard draft for Copilot, per-question scores + integrity + delivery for Video. Paced `PhaseTicker` (warming → listening → scoring). Sidebar consolidated: Screening + Voice replaced with a single "AI Interview Suite" entry.
+
+### Regression
+14/14 backend tests green (paced scenarios 5, intake handoff 2, deep-dive 7). Playwright screenshots verified end-to-end for all 6 tasks.
+
+### 2026-02-14 — Tasks 9-11: P2 Sprint ✅ DONE
+
+**Task 9 · Executive Copilot data + what-if sliders** — verified already working:
+- `/intelligence/organization/health` populates 5 KPIs + department table (5 deps, 9 teams)
+- `/intelligence/workforce/skill-gaps` populates skill matrix (23 rows)
+- `/simulate/what-if` responsive to sliders (attrition, budget, checkboxes for freeze/expansion/AI doubles) → 237→295 trajectory with AI recommendation card
+
+**Task 10 · Candidate Assistant → prep agent**
+- `CandidateAssistant.jsx` restructured with a 4-tab selector: **Status** (existing lookup + FAQ), **Interview prep** (5-stage walkthrough — AI Screening → Recruiter phone → Technical → Onsite → Offer — each with duration, "what to expect", and STAR-format tips), **Org overview** (LevelShift 237 people, values, 5 department cards with size + focus), **Day in the life** (7-block hour-by-hour schedule for a Senior Engineer).
+
+**Task 11 · Intelligence tab enhancements**
+- **Planner** (`PlannerView.jsx`): added 5-stage `PLANNER REASONING TRACE` panel that ticks visibly while planning (Parsing → Retrieving world state → Matching capabilities → Scoring → Schema-validating), plus a dispatch footer with step count, unique capabilities, avg confidence.
+- **Agent Registry** (`Agents.jsx`): each card is now click-to-expand. When open shows `RECENT ACTIVITY · LAST 24H` (5 timestamped ok/held events deterministically synthesised from agent_id) and `CURRENT / QUEUED TASKS` (3 tasks with priority + ETA).
+- **DeepDive** (`DeepDive.jsx`): added SWIMLANE/ARCHITECTURE view toggle. Architecture view is a 5-layer interactive diagram (Business · Decision · Execution · Knowledge · Infrastructure) with 3-5 clickable nodes per layer that reveal role descriptions on click, plus a "Business steers → Decision proposes → Execution acts → Knowledge grounds → Infrastructure logs everything" dataflow footer.
+
+### Regression
+9/9 backend tests green (5 paced scenarios, 4 deep-dive replay). Playwright verified all Task 10 + 11 features render end-to-end.
+
+### v2 build status
+Tasks 1-11 (P0/P1/P2) all done. Task 12 (Platform depth) skipped by design — user's P3 lowest priority and budget-gated.

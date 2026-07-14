@@ -29,8 +29,7 @@ const NAV = [
   { key: "sourcing", to: "/sourcing", label: "Sourcing", icon: Radar, group: "APPS" },
   { key: "resume", to: "/resume", label: "Resume Studio", icon: ScrollText, group: "APPS" },
   { key: "outreach", to: "/outreach", label: "Outreach Studio", icon: Boxes, group: "APPS" },
-  { key: "screening", to: "/screening", label: "Screening", icon: FileWarning, group: "APPS" },
-  { key: "voice", to: "/voice", label: "Voice Interview", icon: Headphones, group: "APPS" },
+  { key: "screening", to: "/interview", label: "AI Interview Suite", icon: Headphones, group: "APPS" },
   { key: "executive", to: "/executive", label: "Executive Copilot", icon: Sparkles, group: "APPS" },
   { key: "candidate", to: "/candidate", label: "Candidate Assistant", icon: Headphones, group: "APPS" },
 

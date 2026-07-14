@@ -117,6 +117,7 @@ export default function DeepDive() {
   }, [replay, visibleCount]);
 
   const lanes = replay?.lanes || Object.keys(LANE_META);
+  const [view, setView] = useState("swimlane"); // "swimlane" | "architecture"
 
   return (
     <AppLayout>
@@ -136,8 +137,32 @@ export default function DeepDive() {
               with real payloads, confidence, and human approval pauses.
             </div>
           </div>
+          <div
+            data-testid="deepdive-view-toggle"
+            className="inline-flex items-center gap-0 border border-slate-800 rounded-sm bg-slate-950/60 p-0.5 shrink-0"
+          >
+            {[
+              { id: "swimlane",     label: "SWIMLANE" },
+              { id: "architecture", label: "ARCHITECTURE" },
+            ].map((v) => (
+              <button
+                key={v.id}
+                data-testid={`deepdive-view-${v.id}`}
+                onClick={() => setView(v.id)}
+                className={`px-2.5 py-1.5 rounded-sm font-mono2 text-[10px] tracking-widest transition ${
+                  view === v.id
+                    ? "bg-indigo-500/25 text-indigo-200 border border-indigo-500/40"
+                    : "text-slate-500 hover:text-slate-300 border border-transparent"
+                }`}
+              >
+                {v.label}
+              </button>
+            ))}
+          </div>
         </div>
+        {view === "architecture" && <LayeredArchitecture />}
 
+        {view === "swimlane" && (
         <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-4">
           {/* Execution picker */}
           <div className="border border-slate-800 bg-slate-900 rounded-md overflow-hidden">
@@ -443,7 +468,160 @@ export default function DeepDive() {
             )}
           </div>
         </div>
+        )}
       </div>
     </AppLayout>
+  );
+}
+
+
+/* ============================================================
+   TASK 11 — Layered agent architecture diagram
+   ============================================================ */
+
+const ARCH_LAYERS = [
+  {
+    key: "business",
+    label: "Business layer",
+    color: "indigo",
+    tagline: "The 'why' — outcomes leaders can steer",
+    nodes: [
+      { id: "policy_mgr",  name: "Policy Manager",     what: "Fairness, PII, DEI, comp bands." },
+      { id: "objectives",  name: "Objectives",         what: "Portfolio-level hiring targets." },
+      { id: "goverance_ui",name: "Governance",         what: "Immutable audit; who signed off." },
+    ],
+  },
+  {
+    key: "decision",
+    label: "Decision layer",
+    color: "cyan",
+    tagline: "The 'what' — where AI proposes plans",
+    nodes: [
+      { id: "planner",     name: "Planner",            what: "Claude 4.5 · schema-validated plans." },
+      { id: "policy_eng",  name: "Policy Engine",      what: "Evaluates every step before execution." },
+      { id: "strategist",  name: "Strategy Agent",     what: "Skill scarcity + workforce simulation." },
+      { id: "reflect",     name: "Reflection",         what: "What worked, what to change." },
+    ],
+  },
+  {
+    key: "execution",
+    label: "Execution layer",
+    color: "emerald",
+    tagline: "The 'how' — deterministic tools that DO",
+    nodes: [
+      { id: "runtime",     name: "Runtime",            what: "Executes steps, records events." },
+      { id: "cap_reg",     name: "Capability Registry",what: "The catalog of callable actions." },
+      { id: "sourcing",    name: "Sourcing Agent",     what: "Parallel scan across 10 channels." },
+      { id: "outreach",    name: "Outreach Agent",     what: "Per-tone message packs." },
+      { id: "screen",      name: "Screening Agent",    what: "8-dim rubric + async voice + video." },
+    ],
+  },
+  {
+    key: "knowledge",
+    label: "Knowledge layer",
+    color: "amber",
+    tagline: "Grounded facts — no hallucinations",
+    nodes: [
+      { id: "world",       name: "World State",        what: "Candidates, reqs, offers, events." },
+      { id: "memory",      name: "Episodic Memory",    what: "Prior recommendations + outcomes." },
+      { id: "skill_graph", name: "Skill Graph",        what: "Structured skills, supply/demand." },
+    ],
+  },
+  {
+    key: "infra",
+    label: "Infrastructure layer",
+    color: "violet",
+    tagline: "The plumbing — boring, dependable",
+    nodes: [
+      { id: "event_bus",   name: "Event Bus",          what: "Append-only, replayable." },
+      { id: "auth",        name: "Auth · Google OAuth",what: "Roles: recruiter, HM, exec, admin." },
+      { id: "obs",         name: "Observability",      what: "Latency, cost, health per agent." },
+      { id: "storage",     name: "Storage · MongoDB",  what: "Event stream + world state." },
+    ],
+  },
+];
+
+const ARCH_COLORS = {
+  indigo:  { border: "border-indigo-500/40",  text: "text-indigo-300",  bg: "bg-indigo-500/[0.05]" },
+  cyan:    { border: "border-cyan-500/40",    text: "text-cyan-300",    bg: "bg-cyan-500/[0.05]" },
+  emerald: { border: "border-emerald-500/40", text: "text-emerald-300", bg: "bg-emerald-500/[0.05]" },
+  amber:   { border: "border-amber-500/40",   text: "text-amber-300",   bg: "bg-amber-500/[0.05]" },
+  violet:  { border: "border-violet-500/40",  text: "text-violet-300",  bg: "bg-violet-500/[0.05]" },
+};
+
+function LayeredArchitecture() {
+  const [openNode, setOpenNode] = useState(null);
+  return (
+    <div
+      data-testid="architecture-diagram"
+      className="border border-slate-800 bg-slate-900 rounded-md overflow-hidden"
+    >
+      <div className="p-4 border-b border-slate-800/60">
+        <div className="font-mono2 text-[10px] tracking-widest text-indigo-400 mb-1">
+          EAROS · LAYERED AGENT ARCHITECTURE
+        </div>
+        <div className="text-slate-400 text-[13px]">
+          Intelligence separated from execution. Five layers, each independently
+          testable, replaceable, and audited. Click a node for its role.
+        </div>
+      </div>
+      <div className="p-4 space-y-3">
+        {ARCH_LAYERS.map((layer) => {
+          const c = ARCH_COLORS[layer.color];
+          return (
+            <div
+              key={layer.key}
+              data-testid={`arch-layer-${layer.key}`}
+              className={`border ${c.border} ${c.bg} rounded-sm`}
+            >
+              <div className="px-3 py-2 border-b border-slate-800/50 flex items-baseline justify-between gap-3">
+                <div>
+                  <div className={`font-mono2 text-[10px] tracking-widest ${c.text}`}>
+                    {layer.label.toUpperCase()}
+                  </div>
+                  <div className="text-slate-100 text-[12px]">{layer.tagline}</div>
+                </div>
+                <div className="font-mono2 text-[10px] text-slate-500">
+                  {layer.nodes.length} nodes
+                </div>
+              </div>
+              <div className="p-2 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
+                {layer.nodes.map((n) => {
+                  const open = openNode === n.id;
+                  return (
+                    <button
+                      key={n.id}
+                      data-testid={`arch-node-${n.id}`}
+                      onClick={() => setOpenNode(open ? null : n.id)}
+                      className={`text-left p-2 rounded-sm border transition ${
+                        open
+                          ? `${c.border} bg-slate-950 ring-1 ring-indigo-500/30`
+                          : "border-slate-800 bg-slate-950/60 hover:border-slate-700"
+                      }`}
+                    >
+                      <div className="text-slate-100 text-[12px] font-medium truncate">
+                        {n.name}
+                      </div>
+                      <div className="font-mono2 text-[10px] text-slate-500 truncate mt-0.5">
+                        {n.id}
+                      </div>
+                      {open && (
+                        <div className="text-[11px] text-slate-300 mt-2">
+                          {n.what}
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="p-3 border-t border-slate-800/60 font-mono2 text-[10px] text-slate-500 tracking-widest">
+        DATAFLOW · Business steers → Decision proposes → Execution acts →
+        Knowledge grounds → Infrastructure logs everything
+      </div>
+    </div>
   );
 }

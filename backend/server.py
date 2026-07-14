@@ -29,6 +29,7 @@ load_dotenv(ROOT_DIR / ".env")
 
 from applications.auth import AppUser, build_router as build_auth_router, get_current_user
 from foundation import (
+    EventType,
     ExecutionStatus,
     PipelineStage,
     Recommendation,
@@ -203,6 +204,47 @@ async def get_candidate(candidate_id: str, user: AppUser = Depends(_current_user
     if not c:
         raise HTTPException(404, "candidate not found")
     return c.model_dump()
+
+
+class StageTransitionRequest(BaseModel):
+    stage: str
+    reason: Optional[str] = None
+
+
+@app.post("/api/world/candidates/{candidate_id}/stage")
+async def set_candidate_stage_ep(
+    candidate_id: str,
+    req: StageTransitionRequest,
+    user: AppUser = Depends(_current_user),
+):
+    c = await world.get_candidate(candidate_id)
+    if not c:
+        raise HTTPException(404, "candidate not found")
+    try:
+        new_stage = PipelineStage(req.stage)
+    except ValueError:
+        raise HTTPException(400, f"invalid stage: {req.stage}")
+
+    old_stage = c.stage
+    await world.set_candidate_stage(candidate_id, new_stage)
+
+    # Emit an immutable event so the transition shows up in Governance audit
+    from foundation import DomainEvent
+    await governance.emit(DomainEvent(
+        event_type=EventType.CANDIDATE_STAGE_CHANGED,
+        actor=f"recruiter:{user.user_id}",
+        subject_type="candidate",
+        subject_id=candidate_id,
+        organization_id=user.organization_id,
+        payload={
+            "action": "manual_stage_transition",
+            "from": old_stage.value,
+            "to": new_stage.value,
+            "reason": req.reason or "manual override by recruiter",
+        },
+    ))
+    updated = await world.get_candidate(candidate_id)
+    return updated.model_dump()
 
 
 @app.get("/api/world/offers")

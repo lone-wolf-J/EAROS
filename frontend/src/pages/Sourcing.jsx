@@ -1,6 +1,16 @@
 import React, { useEffect, useState } from "react";
 import useSWR from "swr";
-import { Radar, Zap } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import {
+  ArrowRight,
+  CalendarCheck,
+  CheckCircle2,
+  Mail,
+  Radar,
+  Send,
+  Users2,
+  Zap,
+} from "lucide-react";
 import { api } from "@/lib/api";
 import { EAROS } from "@/constants/testIds/earos";
 import AppLayout from "@/components/layout/AppLayout";
@@ -13,6 +23,8 @@ export default function Sourcing() {
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState({});
   const [result, setResult] = useState(null);
+  const [triggered, setTriggered] = useState({});
+  const navigate = useNavigate();
 
   useEffect(() => {
     if (jobs && !jobId) setJobId(jobs[0]?.job_id);
@@ -31,6 +43,15 @@ export default function Sourcing() {
     }
     setResult(data);
     setRunning(false);
+    setTriggered({});
+  };
+
+  const jobTitle = jobs?.find((j) => j.job_id === jobId)?.title || "";
+  const actionPlan = result ? buildActionPlan(result, jobTitle) : [];
+
+  const triggerAction = (id, doNavigate) => {
+    setTriggered((t) => ({ ...t, [id]: true }));
+    if (doNavigate) setTimeout(doNavigate, 900);
   };
 
   return (
@@ -95,6 +116,34 @@ export default function Sourcing() {
           </div>
         )}
 
+        {result && (
+          <div
+            data-testid="sourcing-action-plan"
+            className="border border-indigo-500/40 bg-indigo-500/[0.03] rounded-md"
+          >
+            <div className="p-3 border-b border-indigo-500/30 bg-gradient-to-r from-indigo-500/10 to-transparent">
+              <div className="font-mono2 text-[10px] tracking-widest text-indigo-300">
+                RECOMMENDED ACTION PLAN
+              </div>
+              <div className="font-display text-base font-bold text-slate-100">
+                What EAROS thinks you should do next
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-0 md:divide-x divide-slate-800/60">
+              {actionPlan.map((a) => (
+                <ActionCard
+                  key={a.id}
+                  action={a}
+                  done={!!triggered[a.id]}
+                  onTrigger={() =>
+                    triggerAction(a.id, () => a.navigate && navigate(a.navigate))
+                  }
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
         {(running || result) && (
           <div className="border border-slate-800 bg-slate-900 rounded-md overflow-hidden">
             <div className="p-3 border-b border-slate-800/60 font-mono2 text-[10px] tracking-widest text-slate-500 flex items-center gap-2">
@@ -156,3 +205,108 @@ export default function Sourcing() {
     </AppLayout>
   );
 }
+
+
+/* ============================================================
+   TASK 5 — Interactive Action Plan
+   ============================================================ */
+
+function buildActionPlan(result, jobTitle) {
+  const unique = result.unique_matches || 0;
+  const top25 = Math.min(25, unique);
+  const top10 = Math.min(10, unique);
+  const topSource = [...(result.channels || [])].sort(
+    (a, b) => (b.unique_matches || 0) - (a.unique_matches || 0),
+  )[0];
+  return [
+    {
+      id: "outreach",
+      icon: Mail,
+      label: `Contact top ${top25}`,
+      detail: `Personalised outreach to the top ${top25} scored matches for ${jobTitle}.`,
+      cta: "OPEN OUTREACH STUDIO",
+      navigate: "/outreach",
+      capability: "cap.draft_outreach",
+    },
+    {
+      id: "screen",
+      icon: Send,
+      label: `AI screen top ${top10}`,
+      detail: `Send a 5-question AI screening to the highest-fit ${top10} candidates.`,
+      cta: "OPEN SCREENING",
+      navigate: "/screening",
+      capability: "cap.screen_candidate",
+    },
+    {
+      id: "retarget",
+      icon: Users2,
+      label: `Retarget from ${topSource?.channel || "ATS"}`,
+      detail: topSource
+        ? `${topSource.channel} returned ${topSource.unique_matches} unique. Retarget silver-medalists.`
+        : "Re-engage silver-medalists from previous requisitions.",
+      cta: "OPEN RECRUITER COPILOT",
+      navigate: "/recruiter",
+      capability: "cap.retarget",
+    },
+    {
+      id: "schedule",
+      icon: CalendarCheck,
+      label: "Schedule 5 with HM",
+      detail: "Book 5 highest-fit candidates with the hiring manager this week.",
+      cta: "SCHEDULE",
+      navigate: null,
+      capability: "cap.schedule_interview",
+    },
+  ];
+}
+
+function ActionCard({ action, done, onTrigger }) {
+  const Icon = action.icon;
+  return (
+    <div
+      data-testid={`sourcing-action-${action.id}`}
+      className={`p-4 ${done ? "bg-emerald-500/[0.04]" : ""}`}
+    >
+      <div className="flex items-center gap-2 mb-1">
+        <Icon
+          className={`w-4 h-4 ${done ? "text-emerald-400" : "text-indigo-300"}`}
+          strokeWidth={1.5}
+        />
+        <div className="font-mono2 text-[10px] tracking-widest text-slate-500 truncate">
+          {action.capability}
+        </div>
+      </div>
+      <div
+        className={`text-[13px] font-medium ${done ? "text-emerald-200" : "text-slate-100"}`}
+      >
+        {action.label}
+      </div>
+      <div className="text-[11px] text-slate-400 mt-1 min-h-[32px]">
+        {action.detail}
+      </div>
+      <button
+        data-testid={`sourcing-action-trigger-${action.id}`}
+        onClick={onTrigger}
+        disabled={done}
+        className={`mt-3 w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-sm font-mono2 text-[11px] transition ${
+          done
+            ? "bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 cursor-default"
+            : "bg-indigo-500/15 hover:bg-indigo-500/30 border border-indigo-500/40 text-indigo-300"
+        }`}
+      >
+        {done ? (
+          <>
+            <CheckCircle2 className="w-3.5 h-3.5" strokeWidth={1.5} />
+            TRIGGERED
+          </>
+        ) : (
+          <>
+            {action.cta}
+            <ArrowRight className="w-3.5 h-3.5" strokeWidth={1.5} />
+          </>
+        )}
+      </button>
+    </div>
+  );
+}
+

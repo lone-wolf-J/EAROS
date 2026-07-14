@@ -1,9 +1,24 @@
-import React, { useState } from "react";
-import { Wand2 } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import {
+  CheckCircle2,
+  Cpu,
+  Layers,
+  Loader2,
+  Search,
+  Wand2,
+} from "lucide-react";
 import { api } from "@/lib/api";
 import { EAROS } from "@/constants/testIds/earos";
 import AppLayout from "@/components/layout/AppLayout";
 import AIDecisionCard from "@/components/ai/AIDecisionCard";
+
+const REASONING_TRACE = [
+  { key: "parse",   label: "Parsing goal",             detail: "Extracting entities, verbs, objects." },
+  { key: "world",   label: "Retrieving world state",   detail: "Loading grounded facts for candidate + job." },
+  { key: "capmatch",label: "Matching capabilities",    detail: "Scanning the registry for callable actions." },
+  { key: "score",   label: "Scoring & ordering steps", detail: "Composing a confident, policy-safe plan." },
+  { key: "verify",  label: "Schema-validating plan",   detail: "Filtering invalid capability IDs at the edge." },
+];
 
 export default function PlannerView() {
   const [goal, setGoal] = useState(
@@ -15,6 +30,19 @@ export default function PlannerView() {
   const [plan, setPlan] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
+  const [traceIdx, setTraceIdx] = useState(-1);
+
+  useEffect(() => {
+    if (!loading) return undefined;
+    setTraceIdx(0);
+    let step = 0;
+    const id = setInterval(() => {
+      step += 1;
+      if (step >= REASONING_TRACE.length) clearInterval(id);
+      else setTraceIdx(step);
+    }, 1100);
+    return () => clearInterval(id);
+  }, [loading]);
 
   const run = async () => {
     setLoading(true);
@@ -85,6 +113,83 @@ export default function PlannerView() {
           </button>
           {err && <div className="text-rose-400 text-[12px]">{err}</div>}
         </div>
+
+        {(loading || plan) && (
+          <div
+            data-testid="planner-reasoning-trace"
+            className="border border-indigo-500/40 bg-indigo-500/[0.03] rounded-md p-4"
+          >
+            <div className="font-mono2 text-[10px] tracking-widest text-indigo-300 mb-3 flex items-center gap-2">
+              <Search className="w-3 h-3" strokeWidth={1.5} />
+              PLANNER REASONING TRACE
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-0 md:divide-x divide-slate-800/60">
+              {REASONING_TRACE.map((r, i) => {
+                const done = (!loading && !!plan) || i < traceIdx;
+                const active = loading && i === traceIdx;
+                return (
+                  <div key={r.key} className="p-2">
+                    <div className="flex items-center gap-1.5 mb-1">
+                      {done ? (
+                        <CheckCircle2
+                          className="w-3.5 h-3.5 text-emerald-400"
+                          strokeWidth={1.5}
+                        />
+                      ) : active ? (
+                        <Loader2
+                          className="w-3.5 h-3.5 text-indigo-300 animate-spin"
+                          strokeWidth={1.5}
+                        />
+                      ) : (
+                        <div className="w-3.5 h-3.5 rounded-full border border-slate-700" />
+                      )}
+                      <div
+                        className={`font-mono2 text-[9px] tracking-widest ${
+                          done ? "text-emerald-400" : active ? "text-indigo-300" : "text-slate-600"
+                        }`}
+                      >
+                        {r.label.toUpperCase()}
+                      </div>
+                    </div>
+                    <div
+                      className={`text-[11px] ${
+                        done || active ? "text-slate-300" : "text-slate-500"
+                      }`}
+                    >
+                      {r.detail}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {plan && (
+              <div className="mt-3 pt-3 border-t border-slate-800 flex items-center gap-4 text-[12px]">
+                <div className="flex items-center gap-1.5 text-slate-400">
+                  <Cpu className="w-3.5 h-3.5 text-cyan-400" strokeWidth={1.5} />
+                  Dispatched · <span className="text-slate-100 font-mono2">{plan.steps.length}</span> steps
+                </div>
+                <div className="flex items-center gap-1.5 text-slate-400">
+                  <Layers className="w-3.5 h-3.5 text-amber-400" strokeWidth={1.5} />
+                  Capabilities · <span className="text-slate-100 font-mono2">
+                    {new Set(plan.steps.map((s) => s.capability_id)).size}
+                  </span> unique
+                </div>
+                <div className="flex items-center gap-1.5 text-slate-400">
+                  Avg confidence · <span className="text-emerald-400 font-mono2">
+                    {plan.steps.length
+                      ? Math.round(
+                          (plan.steps.reduce((s, x) => s + x.confidence, 0) /
+                            plan.steps.length) *
+                            100,
+                        )
+                      : 0}
+                    %
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {plan && (
           <>
