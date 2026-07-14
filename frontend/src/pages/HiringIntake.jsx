@@ -1,13 +1,17 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   AlertCircle,
+  ArrowRight,
   Building,
   CheckCircle2,
   Clock,
   DollarSign,
+  Loader2,
   MapPin,
   MessageSquare,
   Radar,
+  Rocket,
   ShieldAlert,
   Sparkles,
   Target,
@@ -51,24 +55,79 @@ function KV({ label, value, tone = "slate" }) {
   );
 }
 
+const AGENT_FLOW = [
+  {
+    key: "requirements",
+    agent: "Requirements Agent",
+    label: "Extracting requirements",
+    detail: "Parsing must-haves, seniority, location, compensation, urgency.",
+  },
+  {
+    key: "jd",
+    agent: "Job Architecture Agent",
+    label: "Composing calibrated JD",
+    detail: "Generating responsibilities, requirements, growth path, comp band.",
+  },
+  {
+    key: "sourcing_plan",
+    agent: "Sourcing Strategy Agent",
+    label: "Drafting multi-wave sourcing plan",
+    detail: "Prioritising channels, building Boolean search string.",
+  },
+  {
+    key: "handoff",
+    agent: "Recruiter Handoff",
+    label: "Handing off to Recruiter Copilot",
+    detail: "Attaching JD + plan to the matched requisition.",
+  },
+];
+
 export default function HiringIntake() {
   const [brief, setBrief] = useState(EXAMPLES[0]);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [flowStep, setFlowStep] = useState(-1); // -1 = idle; 0..3 = active; 4 = done
+  const navigate = useNavigate();
+
+  // Drive the visible agent-flow ticker while the LLM runs. Advances every
+  // ~1.4s. If the API returns before the ticker completes, it snaps to done.
+  useEffect(() => {
+    if (!loading) return undefined;
+    setFlowStep(0);
+    let step = 0;
+    const id = setInterval(() => {
+      step += 1;
+      if (step >= AGENT_FLOW.length) {
+        clearInterval(id);
+      } else {
+        setFlowStep(step);
+      }
+    }, 1400);
+    return () => clearInterval(id);
+  }, [loading]);
 
   const analyze = async () => {
     setLoading(true);
     setError(null);
     setResult(null);
+    setFlowStep(0);
     try {
       const { data } = await api.post("/intake/analyze", { brief });
       setResult(data);
+      setFlowStep(AGENT_FLOW.length); // all done
     } catch (e) {
       setError(String(e.response?.data?.detail || e.message));
+      setFlowStep(-1);
     } finally {
       setLoading(false);
     }
+  };
+
+  const openInCopilot = () => {
+    const jid = result?.matched_job_id;
+    if (!jid) return;
+    navigate(`/recruiter?job=${jid}`);
   };
 
   const intake = result?.intake;
@@ -135,6 +194,17 @@ export default function HiringIntake() {
             {error && <div className="text-rose-400 text-[12px]">{error}</div>}
           </div>
         </div>
+
+        {/* Job Architecture Agent flow (paced, always visible once run) */}
+        {(loading || result) && (
+          <JobArchitectureFlow
+            steps={AGENT_FLOW}
+            activeIdx={flowStep}
+            done={!loading && !!result}
+            result={result}
+            onOpenInCopilot={openInCopilot}
+          />
+        )}
 
         {/* Result */}
         {intake && (
@@ -354,3 +424,182 @@ export default function HiringIntake() {
     </AppLayout>
   );
 }
+
+
+/* ============================================================
+   Job Architecture Agent — paced flow banner + handoff CTA
+   ============================================================ */
+
+function JobArchitectureFlow({ steps, activeIdx, done, result, onOpenInCopilot }) {
+  const matchedJobId = result?.matched_job_id;
+  const plan = result?.sourcing_plan;
+
+  return (
+    <div
+      data-testid="job-architecture-flow"
+      className="border border-indigo-500/40 bg-indigo-500/[0.03] rounded-md overflow-hidden"
+    >
+      <div className="px-5 py-3 bg-gradient-to-r from-indigo-500/10 via-transparent to-transparent border-b border-indigo-500/30 flex items-center gap-3">
+        {done ? (
+          <CheckCircle2
+            className="w-5 h-5 text-emerald-400"
+            strokeWidth={1.5}
+          />
+        ) : (
+          <Loader2
+            className="w-5 h-5 text-indigo-300 animate-spin"
+            strokeWidth={1.5}
+          />
+        )}
+        <div>
+          <div className="font-mono2 text-[10px] tracking-widest text-indigo-300">
+            JOB ARCHITECTURE AGENT · {done ? "READY FOR HANDOFF" : "REASONING"}
+          </div>
+          <div className="font-display text-base font-bold text-slate-100">
+            {done
+              ? "Requisition composed — ready to route to a recruiter."
+              : steps[Math.max(0, Math.min(activeIdx, steps.length - 1))]?.label}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-0 md:divide-x divide-slate-800/60">
+        {steps.map((s, i) => {
+          const isDone = done || i < activeIdx;
+          const isActive = !done && i === activeIdx;
+          return (
+            <div
+              key={s.key}
+              data-testid={`job-arch-step-${s.key}`}
+              className={`p-4 ${
+                isActive ? "bg-indigo-500/[0.05]" : ""
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-1">
+                {isDone ? (
+                  <CheckCircle2
+                    className="w-4 h-4 text-emerald-400"
+                    strokeWidth={1.5}
+                  />
+                ) : isActive ? (
+                  <Loader2
+                    className="w-4 h-4 text-indigo-300 animate-spin"
+                    strokeWidth={1.5}
+                  />
+                ) : (
+                  <div className="w-4 h-4 rounded-full border border-slate-700" />
+                )}
+                <div
+                  className={`font-mono2 text-[10px] tracking-widest ${
+                    isDone
+                      ? "text-emerald-400"
+                      : isActive
+                        ? "text-indigo-300"
+                        : "text-slate-600"
+                  }`}
+                >
+                  {s.agent}
+                </div>
+              </div>
+              <div
+                className={`text-[13px] font-medium ${
+                  isDone || isActive ? "text-slate-100" : "text-slate-500"
+                }`}
+              >
+                {s.label}
+              </div>
+              <div className="text-[11px] text-slate-400 mt-1">
+                {s.detail}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {done && (
+        <div className="px-5 py-4 border-t border-indigo-500/30 bg-slate-950/40 flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="font-mono2 text-[10px] tracking-widest text-slate-500">
+              MATCHED REQUISITION
+            </div>
+            <div className="text-slate-100 text-[13px]">
+              {matchedJobId ? (
+                <>
+                  <span className="font-mono2 text-indigo-300">
+                    {matchedJobId}
+                  </span>
+                  {" · "}
+                  <span>ready to open in Recruiter Copilot</span>
+                </>
+              ) : (
+                <span className="text-amber-300">
+                  No exact match found — new requisition draft attached.
+                </span>
+              )}
+            </div>
+          </div>
+          <button
+            data-testid="job-arch-handoff-btn"
+            onClick={onOpenInCopilot}
+            disabled={!matchedJobId}
+            className="shrink-0 flex items-center gap-1.5 px-4 py-2 rounded-sm bg-indigo-500 hover:bg-indigo-400 text-slate-950 text-[12px] font-mono2 font-semibold disabled:opacity-40"
+          >
+            <Rocket className="w-3.5 h-3.5" strokeWidth={1.5} />
+            OPEN IN RECRUITER COPILOT
+            <ArrowRight className="w-3.5 h-3.5" strokeWidth={1.5} />
+          </button>
+        </div>
+      )}
+
+      {done && plan && (
+        <div className="px-5 py-4 border-t border-slate-800/60 space-y-3">
+          <div className="font-mono2 text-[10px] tracking-widest text-slate-500 flex items-center gap-2">
+            <Radar className="w-3 h-3" strokeWidth={1.5} />
+            SOURCING PLAN · {plan.estimated_reach_candidates} target reach ·{" "}
+            ~{plan.estimated_sweep_minutes}min sweep
+          </div>
+          {plan.search_string && (
+            <div className="p-2 bg-slate-950 border border-slate-800 rounded-sm text-[11px] font-mono2 text-slate-300 break-all">
+              {plan.search_string}
+            </div>
+          )}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+            {plan.waves.map((w, i) => (
+              <div
+                key={i}
+                data-testid={`sourcing-wave-${i}`}
+                className="p-3 bg-slate-950 border border-slate-800 rounded-sm"
+              >
+                <div className="font-mono2 text-[10px] tracking-widest text-cyan-300 mb-1">
+                  {w.wave} · target {w.target_candidates}
+                </div>
+                <ul className="space-y-1">
+                  {w.channels.map((c, j) => (
+                    <li
+                      key={j}
+                      className="text-[12px] text-slate-200 flex items-start gap-2"
+                    >
+                      <span
+                        className={`shrink-0 px-1 py-0 rounded-sm border font-mono2 text-[9px] ${
+                          c.priority === "P0"
+                            ? "text-rose-300 border-rose-500/30 bg-rose-500/10"
+                            : c.priority === "P1"
+                              ? "text-amber-300 border-amber-500/30 bg-amber-500/10"
+                              : "text-slate-400 border-slate-700 bg-slate-500/10"
+                        }`}
+                      >
+                        {c.priority}
+                      </span>
+                      <span>{c.channel}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+

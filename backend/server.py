@@ -562,11 +562,94 @@ class IntakeRequest(BaseModel):
     brief: str
 
 
+def _match_job_to_intake(intake: dict[str, Any], jobs: list[Any]) -> Optional[str]:
+    """Fuzzy-match an intake result to the closest seeded job by
+    title tokens + location + skill overlap. Best-effort, deterministic.
+    """
+    if not jobs:
+        return None
+    role = (intake.get("role_title") or "").lower()
+    location = (intake.get("location") or "").lower()
+    must_haves = {s.lower() for s in (intake.get("must_have_skills") or [])}
+    role_tokens = {t for t in role.replace("/", " ").split() if len(t) > 2}
+
+    def score(job: Any) -> float:
+        title = (getattr(job, "title", "") or "").lower()
+        loc = (getattr(job, "location", "") or "").lower()
+        skills = {s.lower() for s in (getattr(job, "required_skills", []) or [])}
+        s = 0.0
+        s += sum(1.5 for t in role_tokens if t in title)
+        if location and location in loc:
+            s += 3.0
+        s += 2.0 * len(must_haves & skills)
+        return s
+
+    ranked = sorted(jobs, key=score, reverse=True)
+    if score(ranked[0]) <= 0.0:
+        return None
+    return ranked[0].job_id
+
+
+def _build_sourcing_plan(intake: dict[str, Any]) -> dict[str, Any]:
+    """Turn recommended channels into an executable, staged sourcing plan."""
+    channels = intake.get("recommended_sourcing_channels") or []
+    must = intake.get("must_have_skills") or []
+    location = intake.get("location") or ""
+    headcount = intake.get("headcount") or 1
+
+    # Wave 1: P0 channels, Wave 2: P1, Wave 3: P2
+    waves = []
+    for tier, label in [("P0", "Wave 1 · Priority sweep"),
+                        ("P1", "Wave 2 · Expansion sweep"),
+                        ("P2", "Wave 3 · Long-tail")]:
+        tier_chans = [c for c in channels if c.get("priority") == tier]
+        if tier_chans:
+            waves.append({
+                "wave": label,
+                "channels": tier_chans,
+                "target_candidates": (5 * headcount) if tier == "P0"
+                                     else (3 * headcount) if tier == "P1"
+                                     else (2 * headcount),
+            })
+
+    # Fallback if the LLM returned no channels
+    if not waves:
+        waves = [{
+            "wave": "Wave 1 · Priority sweep",
+            "channels": [
+                {"channel": "LinkedIn Recruiter", "priority": "P0",
+                 "why": f"Deepest pool for {location or 'this market'}."},
+                {"channel": "GitHub", "priority": "P0",
+                 "why": "Signal on actual code and OSS contribution."},
+                {"channel": "Internal ATS", "priority": "P1",
+                 "why": "Silver-medalist candidates from prior reqs."},
+            ],
+            "target_candidates": 5 * headcount,
+        }]
+
+    return {
+        "waves": waves,
+        "search_string": " AND ".join(
+            [f'"{s}"' for s in must[:4]] + ([f'"{location}"'] if location else [])
+        ),
+        "estimated_sweep_minutes": 6 + 2 * len(waves),
+        "estimated_reach_candidates": sum(w["target_candidates"] for w in waves),
+    }
+
+
 @app.post("/api/intake/analyze")
 async def intake_analyze(req: IntakeRequest, user: AppUser = Depends(_current_user)):
     intake = await run_intake(req.brief)
     rec = intake_to_recommendation(req.brief, intake)
-    return {"intake": intake, "recommendation": rec.model_dump()}
+    jobs = await world.list_jobs(user.organization_id)
+    matched_job_id = _match_job_to_intake(intake, jobs)
+    sourcing_plan = _build_sourcing_plan(intake)
+    return {
+        "intake": intake,
+        "recommendation": rec.model_dump(),
+        "matched_job_id": matched_job_id,
+        "sourcing_plan": sourcing_plan,
+    }
 
 
 # ============================================================

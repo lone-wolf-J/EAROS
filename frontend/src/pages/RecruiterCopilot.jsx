@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
+import { useSearchParams } from "react-router-dom";
 import { AlertCircle, ChevronRight, MapPin, Play, Wand2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { EAROS } from "@/constants/testIds/earos";
@@ -258,7 +259,9 @@ function ExecutionResult({ result }) {
 }
 
 export default function RecruiterCopilot() {
-  const [jobId, setJobId] = useState(null);
+  const [searchParams] = useSearchParams();
+  const preselectJobId = searchParams.get("job");
+  const [jobId, setJobId] = useState(preselectJobId);
   const [selectedCand, setSelectedCand] = useState(null);
   const [plan, setPlan] = useState(null);
   const [planLoading, setPlanLoading] = useState(false);
@@ -267,8 +270,13 @@ export default function RecruiterCopilot() {
 
   const { data: jobs } = useSWR("/world/jobs", fetcher);
   useEffect(() => {
-    if (jobs && !jobId) setJobId(jobs[0]?.job_id);
-  }, [jobs, jobId]);
+    if (!jobs) return;
+    if (preselectJobId && jobs.some((j) => j.job_id === preselectJobId)) {
+      setJobId(preselectJobId);
+    } else if (!jobId) {
+      setJobId(jobs[0]?.job_id);
+    }
+  }, [jobs, jobId, preselectJobId]);
 
   const { data: candidates, mutate: mutateCandidates } = useSWR(
     jobId ? `/world/jobs/${jobId}/candidates` : null,

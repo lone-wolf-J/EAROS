@@ -137,8 +137,15 @@ Build EAROS: an enterprise AI operating system for talent acquisition combining 
 - `frontend/src/pages/Scenarios.jsx` (full rewrite): polls state every 700ms, renders a persistent stage tracker with current-step banner, active agent label, progress bar, per-step output detail rows, and a prominent amber "HUMAN APPROVAL REQUIRED" card with live countdown + Approve/Reject buttons + open-replay/audit CTAs on completion
 - Tests: `tests/test_scenarios_paced.py` — 5 new tests (execution_id creation, full approval flow, rejection flow, 404, 400 without gate) — all passing. Existing v2/v3 tests updated to use `/run-sync`. 14/14 tests green.
 
-### P1 Backlog (from v2 prompt, in priority order)
-- Task 2 — Hiring Intake → Job Architecture branch (brief → JD → sourcing plan → recruiter hand-off link)
+### 2026-02-14 — Task 2: Hiring Intake → Job Architecture Agent branch ✅ DONE
+- Backend `POST /api/intake/analyze` now returns two extra fields:
+  - `matched_job_id` — fuzzy-matched to closest seeded requisition (title tokens + location + must-have skill overlap; scoring in `server.py::_match_job_to_intake`)
+  - `sourcing_plan` — 3-wave (P0/P1/P2) plan with per-wave target candidate counts, Boolean search string derived from must-haves + location, estimated reach and sweep minutes (`server.py::_build_sourcing_plan`)
+- Frontend `HiringIntake.jsx`: added `JobArchitectureFlow` component — a 4-step paced banner (Requirements Agent → Job Architecture Agent → Sourcing Strategy Agent → Recruiter Handoff) that ticks visibly at ~1.4s intervals while the LLM runs. On completion shows matched requisition ID, an `OPEN IN RECRUITER COPILOT` CTA, the search string, and the multi-wave sourcing plan
+- `RecruiterCopilot.jsx`: now reads `?job=<job_id>` from `useSearchParams` and pre-selects that requisition — no manual scrolling to find the freshly-briefed req
+- Tests: `tests/test_intake_handoff.py` — 2 new pytest cases (Salesforce brief matches `job_sfdc_arch_austin` + sourcing plan shape; vague brief still returns a plan). 7/7 new Task-1+2 tests green.
+
+### P1 Backlog (from v2 prompt, next up)
 - Task 3 — Hiring Dashboard KPI drill-downs (clickable tiles → detail panels)
 - Task 4 — Recruiter Copilot ops (campaigns, harvester, pipeline panel, stage transitions, semi/full autonomous toggle)
 - Task 5 — Sourcing sweep simulation (per-source counts + action plan)
