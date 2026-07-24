@@ -118,15 +118,56 @@ def _fallback_intake(brief: str) -> dict[str, Any]:
             n = max(1, min(20, int(m.group(1))))
         except Exception:
             n = 1
+
+    # Robust brief parsing so the fallback stays credible even without the LLM.
+    lb = brief.lower()
+    role_title = "Senior Engineer"
+    must_skills = ["Java", "Spring Boot", "Microservices"]
+    nice_skills = ["Kafka", "Kubernetes"]
+    if "salesforce" in lb or "apex" in lb or "sfdc" in lb:
+        role_title = "Salesforce Architect" if "architect" in lb else "Senior Salesforce Engineer"
+        must_skills = ["Apex", "Lightning Web Components (LWC)", "Salesforce Configuration"]
+        nice_skills = ["CPQ", "Sales Cloud", "MuleSoft"]
+    elif "dynamics" in lb or "d365" in lb or "f&o" in lb:
+        role_title = "Dynamics 365 Consultant"
+        must_skills = ["Dynamics 365 F&O", "X++", "Power Platform"]
+        nice_skills = ["Azure DevOps", "SSRS"]
+    elif "ai" in lb.split() or "llm" in lb or "gpt" in lb or "agent" in lb:
+        role_title = "Principal AI Product Manager" if "product" in lb else "Staff AI Engineer"
+        must_skills = ["LLM Ops", "Prompt Engineering", "Python"]
+        nice_skills = ["RAG", "Agentic Systems", "Vector DBs"]
+    elif "data engineer" in lb or "lakehouse" in lb or "spark" in lb:
+        role_title = "Senior Data Engineer"
+        must_skills = ["Spark", "Airflow", "Snowflake"]
+        nice_skills = ["dbt", "Kafka", "Delta Lake"]
+    elif "java" in lb:
+        role_title = "Senior Java Developer"
+
+    # Pull an explicit city if the brief mentions one
+    for city in ("Austin", "New York", "San Francisco", "Bangalore", "Chennai",
+                 "Hyderabad", "Pune", "Mumbai", "Seattle", "London"):
+        if city.lower() in lb:
+            location_hint = f"{city}"
+            if city in ("Bangalore", "Chennai", "Hyderabad", "Pune", "Mumbai"):
+                is_india = True
+                currency = "INR"
+                location_hint = f"{city}, India"
+            elif city in ("Austin", "New York", "San Francisco", "Seattle"):
+                is_india = False
+                currency = "USD"
+                state = {"Austin": "TX", "New York": "NY",
+                         "San Francisco": "CA", "Seattle": "WA"}[city]
+                location_hint = f"{city}, {state}"
+            break
+
     return {
-        "role_title": "Senior Java Developer" if "java" in brief.lower()
-                      else "Senior Engineer",
+        "role_title": role_title,
         "level": "IC4",
         "location": location_hint,
         "country": "India" if is_india else "USA",
         "headcount": n,
-        "must_have_skills": ["Java", "Spring Boot", "Microservices"],
-        "nice_to_have_skills": ["Kafka", "Kubernetes"],
+        "must_have_skills": must_skills,
+        "nice_to_have_skills": nice_skills,
         "domain_experience": ["Banking"] if "bank" in brief.lower() else [],
         "seniority_years_min": 8,
         "seniority_years_max": 12,
@@ -210,26 +251,42 @@ def _fallback_intake(brief: str) -> dict[str, Any]:
     }
 
 
+import asyncio
+
 async def run_intake(brief: str) -> dict[str, Any]:
-    """Run the LLM intake. On failure, fall back to deterministic template."""
+    """Run the LLM intake. On failure or timeout, fall back to deterministic
+    template so the endpoint always returns something within a bounded time
+    (executive demos must never see a raw 502/gateway timeout)."""
     api_key = os.environ.get("EMERGENT_LLM_KEY", "")
     if not api_key:
         return {**_fallback_intake(brief), "source": "fallback"}
-    try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage  # type: ignore
-        chat = LlmChat(
-            api_key=api_key,
-            session_id=f"intake-{abs(hash(brief)) % 999999}",
-            system_message=INTAKE_SYSTEM,
-        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-        resp = await chat.send_message(UserMessage(text=brief))
-        text = resp if isinstance(resp, str) else getattr(resp, "content", str(resp))
-        parsed = _extract_json(text)
-        if not parsed:
-            return {**_fallback_intake(brief), "source": "fallback_parse"}
-        return {**parsed, "source": "llm"}
-    except Exception:
-        return {**_fallback_intake(brief), "source": "fallback_error"}
+
+    # Two attempts against the LLM, each capped at 25s. If both fail, use the
+    # deterministic fallback which is essentially free and instant.
+    for attempt in (1, 2):
+        try:
+            from emergentintegrations.llm.chat import LlmChat, UserMessage  # type: ignore
+            chat = LlmChat(
+                api_key=api_key,
+                session_id=f"intake-{abs(hash(brief)) % 999999}-{attempt}",
+                system_message=INTAKE_SYSTEM,
+            ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+            resp = await asyncio.wait_for(
+                chat.send_message(UserMessage(text=brief)),
+                timeout=25.0,
+            )
+            text = resp if isinstance(resp, str) else getattr(resp, "content", str(resp))
+            parsed = _extract_json(text)
+            if parsed:
+                return {**parsed, "source": "llm"}
+            # Parseable-but-empty output — try again once
+        except (asyncio.TimeoutError, Exception):
+            # Any transient upstream failure (502/504/timeout/socket reset)
+            # — retry once, then give up gracefully.
+            if attempt == 2:
+                break
+            await asyncio.sleep(0.6)
+    return {**_fallback_intake(brief), "source": "fallback_error"}
 
 
 def to_recommendation(brief: str, intake: dict[str, Any]) -> Recommendation:
