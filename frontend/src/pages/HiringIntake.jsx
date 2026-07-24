@@ -112,16 +112,49 @@ export default function HiringIntake() {
     setError(null);
     setResult(null);
     setFlowStep(0);
-    try {
-      const { data } = await api.post("/intake/analyze", { brief });
-      setResult(data);
-      setFlowStep(AGENT_FLOW.length); // all done
-    } catch (e) {
-      setError(String(e.response?.data?.detail || e.message));
-      setFlowStep(-1);
-    } finally {
-      setLoading(false);
+    // Auto-retry on transient upstream failures (Cloudflare 502, timeouts).
+    const MAX_ATTEMPTS = 3;
+    let lastErr = null;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+      try {
+        const { data } = await api.post(
+          "/intake/analyze",
+          { brief },
+          { timeout: 90_000 },
+        );
+        setResult(data);
+        setFlowStep(AGENT_FLOW.length);
+        setLoading(false);
+        return;
+      } catch (e) {
+        lastErr = e;
+        const status = e?.response?.status;
+        const transient =
+          !status ||
+          status === 502 ||
+          status === 503 ||
+          status === 504 ||
+          e?.code === "ECONNABORTED";
+        if (attempt < MAX_ATTEMPTS && transient) {
+          // brief backoff before retry
+          await new Promise((r) => setTimeout(r, 900 * attempt));
+          continue;
+        }
+        break;
+      }
     }
+    // Friendly, non-technical error state. Never expose the raw Cloudflare
+    // HTML/status blob directly to executives.
+    const status = lastErr?.response?.status;
+    const friendly =
+      status === 502 || status === 503 || status === 504
+        ? "The Job Architecture Agent is briefly unreachable — this usually clears in a few seconds."
+        : lastErr?.code === "ECONNABORTED"
+          ? "The agent took longer than expected. Please try again."
+          : String(lastErr?.response?.data?.detail || lastErr?.message || "Something went wrong.");
+    setError(friendly);
+    setFlowStep(-1);
+    setLoading(false);
   };
 
   const openInCopilot = () => {
@@ -191,7 +224,21 @@ export default function HiringIntake() {
                 <span className="pulse-dot" /> agent.intake · claude-sonnet-4.5
               </span>
             )}
-            {error && <div className="text-rose-400 text-[12px]">{error}</div>}
+            {error && (
+              <div
+                data-testid="intake-error"
+                className="w-full flex items-center justify-between gap-3 border border-rose-500/40 bg-rose-500/[0.06] rounded-md px-3 py-2 text-[12px] text-rose-200"
+              >
+                <span>{error}</span>
+                <button
+                  data-testid="intake-retry-btn"
+                  onClick={analyze}
+                  className="shrink-0 px-2.5 py-1 rounded-sm border border-rose-400/50 bg-rose-500/20 hover:bg-rose-500/30 text-rose-100 font-mono2 text-[10px] tracking-widest"
+                >
+                  TRY AGAIN
+                </button>
+              </div>
+            )}
           </div>
         </div>
 

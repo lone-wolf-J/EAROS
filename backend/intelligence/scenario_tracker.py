@@ -18,7 +18,9 @@ from typing import Any, Optional
 # Timings tuned for a live demo: fast enough not to bore, slow enough for
 # executives to read the label and understand what the agent is doing.
 STEP_PACE_SECONDS = 1.7          # baseline delay between steps
-APPROVAL_TIMEOUT_SECONDS = 20    # auto-resume if nobody clicks Approve
+APPROVAL_TIMEOUT_SECONDS = 600   # 10 minutes — plenty of time for a live click.
+                                 # If it times out, the scenario is CANCELLED,
+                                 # not silently auto-approved.
 
 
 @dataclass
@@ -164,9 +166,9 @@ class ScenarioTracker:
                 state._approval_event.wait(),
                 timeout=APPROVAL_TIMEOUT_SECONDS,
             )
-            decision = state._approval_decision or "auto_approved"
+            decision = state._approval_decision or "cancelled"
         except asyncio.TimeoutError:
-            decision = "auto_approved"
+            decision = "timed_out_cancelled"
 
         state.approval = None
         state._approval_deadline = None

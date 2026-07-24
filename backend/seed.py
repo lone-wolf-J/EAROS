@@ -7,6 +7,28 @@ from __future__ import annotations
 import random
 from typing import Any
 
+
+def _derive_candidate_title(job_title: str, rng: random.Random) -> str:
+    """Produce a sensible candidate current-title from the job title without
+    ever duplicating the seniority word (e.g. 'Senior Senior Engineer')."""
+    base = job_title.replace("Lead ", "").replace("Principal ", "Sr. ")
+    if rng.random() < 0.6:
+        return base
+    # Strip any leading seniority word from the domain so 'Senior <domain>
+    # Engineer' never reads 'Senior Senior Engineer'.
+    first = job_title.split()[0]
+    if first.lower() in {"senior", "sr.", "sr", "principal", "staff", "lead"}:
+        # Skip the seniority word — take the domain word after it if present
+        parts = job_title.split()
+        domain = parts[1] if len(parts) > 1 else "Software"
+    else:
+        domain = first
+    if domain.lower() == "engineer":
+        domain = "Software"
+    return f"Senior {domain} Engineer"
+
+
+
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from foundation import (
@@ -289,6 +311,13 @@ async def seed_all(db: AsyncIOMotorDatabase) -> dict[str, int]:
                                        template["salary_max"] * 1.15))
             stage = _weighted_stage(rng)
             risk = rng.sample(RISK_FLAG_POOL, k=rng.randint(0, 2)) if rng.random() < 0.5 else []
+            # Compute a per-candidate fit score so the UI can show real numbers
+            # instead of a flat 0. Skill overlap dominates; experience trims.
+            req = set(template["required_skills"])
+            overlap = len(req & set(has_skills)) / max(1, len(req))
+            exp_fit = 1.0 - min(1.0, abs(years - 9.0) / 12.0)
+            fit_score = round(0.7 * overlap + 0.3 * exp_fit + rng.uniform(-0.06, 0.06), 3)
+            fit_score = max(0.2, min(0.98, fit_score))
             cand = Candidate(
                 candidate_id=f"cand_{template['job_id'].replace('job_', '')}_{i:02d}",
                 organization_id=ORG_ID,
@@ -298,8 +327,7 @@ async def seed_all(db: AsyncIOMotorDatabase) -> dict[str, int]:
                 phone=None,
                 location=template["location"],
                 country=template["country"],
-                current_title=template["title"].replace("Lead ", "").replace("Principal ", "Sr. ")
-                    if rng.random() < 0.6 else f"Senior {template['title'].split()[0]} Engineer",
+                current_title=_derive_candidate_title(template["title"], rng),
                 current_company=rng.choice(companies),
                 years_experience=years,
                 expected_salary=expected,
@@ -307,7 +335,7 @@ async def seed_all(db: AsyncIOMotorDatabase) -> dict[str, int]:
                 skills=list(dict.fromkeys(has_skills)),
                 stage=stage,
                 source=rng.choice(["sourced", "referral", "applied", "agency"]),
-                fit_score=0.0,
+                fit_score=fit_score,
                 risk_flags=risk,
                 picture=rng.choice(PICTURES),
             )

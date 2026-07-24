@@ -667,9 +667,10 @@ function PipelineIntel({ candidates, autonomyMode }) {
   const active = (candidates || []).filter(
     (c) => !["hired", "rejected", "withdrawn"].includes(c.stage),
   );
-  const avgFit = active.length
-    ? active.reduce((s, c) => s + (c.fit_score || 0), 0) / active.length
-    : 0;
+  const withFit = active.filter((c) => (c.fit_score || 0) > 0);
+  const avgFit = withFit.length
+    ? withFit.reduce((s, c) => s + (c.fit_score || 0), 0) / withFit.length
+    : null;
   const riskCount = (candidates || []).filter(
     (c) => (c.risk_flags || []).length > 0,
   ).length;
@@ -682,7 +683,7 @@ function PipelineIntel({ candidates, autonomyMode }) {
       <IntelCell label="Active" value={active.length} tone="cyan" />
       <IntelCell
         label="Avg fit"
-        value={`${Math.round(avgFit * 100)}%`}
+        value={avgFit != null ? `${Math.round(avgFit * 100)}%` : "—"}
         tone="emerald"
       />
       <IntelCell

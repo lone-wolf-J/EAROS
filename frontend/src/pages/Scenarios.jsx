@@ -411,6 +411,16 @@ function StepRow({ step, isActive }) {
   );
 }
 
+function formatCountdown(secs) {
+  const s = Math.max(0, Math.ceil(secs));
+  if (s >= 60) {
+    const m = Math.floor(s / 60);
+    const rest = s % 60;
+    return `${m}:${String(rest).padStart(2, "0")}`;
+  }
+  return `${s}s`;
+}
+
 function ApprovalGateCard({ approval, onApprove, onReject }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -441,13 +451,16 @@ function ApprovalGateCard({ approval, onApprove, onReject }) {
         </div>
         <div className="text-right shrink-0">
           <div className="font-mono2 text-[10px] tracking-widest text-amber-300">
-            AUTO-RESUME IN
+            SCENARIO CANCELS IN
           </div>
           <div
             data-testid="scenario-approval-countdown"
             className="font-display text-3xl font-black text-amber-200 tabular-nums"
           >
-            {Math.max(0, Math.ceil(secs))}s
+            {formatCountdown(secs)}
+          </div>
+          <div className="font-mono2 text-[9px] text-amber-300/70 mt-0.5">
+            explicit approve/reject required
           </div>
         </div>
       </div>
