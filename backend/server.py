@@ -21,6 +21,7 @@ from typing import Any, Optional
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
 
@@ -128,6 +129,19 @@ app.include_router(build_auth_router(db))
 @app.get("/api/health")
 async def health():
     return {"ok": True, "service": "EAROS", "time": utcnow_iso()}
+
+
+@app.get("/api/user-guide.pdf", include_in_schema=False)
+async def user_guide_pdf():
+    """Serve the pre-built PDF user guide as a download."""
+    path = "/app/EAROS_User_Guide.pdf"
+    if not os.path.exists(path):
+        raise HTTPException(404, "user guide PDF not yet built")
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename="EAROS_User_Guide.pdf",
+    )
 
 
 @app.post("/api/bootstrap")
