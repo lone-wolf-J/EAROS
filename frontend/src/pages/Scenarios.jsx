@@ -28,7 +28,13 @@ export default function Scenarios() {
   const pollRef = useRef(null);
   const navigate = useNavigate();
 
-  // Poll execution state
+  // Poll execution state.
+  //
+  // Note: `api` and `POLL_INTERVAL_MS` are module-level constants and setters
+  // (`setState`, `setError`) are stable identities from useState — including
+  // them in deps would either be a no-op or reset the polling loop on every
+  // render. We depend only on `execId` which is the actual re-run trigger.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!execId) return undefined;
     let cancelled = false;

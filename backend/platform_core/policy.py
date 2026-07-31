@@ -138,15 +138,16 @@ class PolicyEngine:
                 require_approval = True
                 approval_reasons.extend(reason_bits)
 
+        # Aggregate the per-policy decisions. Defaults keep static analyzers
+        # (and any future refactor that shortens the if/elif/else) safe.
+        final = PolicyDecision.ALLOW
+        reason = "all policies passed"
         if deny_reasons:
             final = PolicyDecision.DENY
             reason = "; ".join(deny_reasons)
         elif require_approval:
             final = PolicyDecision.REQUIRE_APPROVAL
             reason = "; ".join(approval_reasons) or "approval required"
-        else:
-            final = PolicyDecision.ALLOW
-            reason = "all policies passed"
 
         # Emit immutable audit event
         await self.governance.emit(DomainEvent(

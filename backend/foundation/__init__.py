@@ -141,12 +141,11 @@ class ConfidenceScore(BaseModel):
     @classmethod
     def from_value(cls, v: float) -> "ConfidenceScore":
         v = max(0.0, min(1.0, float(v)))
+        band = "LOW"
         if v >= 0.80:
             band = "HIGH"
         elif v >= 0.55:
             band = "MEDIUM"
-        else:
-            band = "LOW"
         return cls(value=round(v, 3), band=band)
 
 

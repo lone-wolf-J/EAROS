@@ -293,7 +293,8 @@ export default function RecruiterCopilot() {
     } else if (!jobId) {
       setJobId(jobs[0]?.job_id);
     }
-  }, [jobs, jobId, preselectJobId]);
+    // setJobId is a stable useState setter; listed for lint completeness.
+  }, [jobs, jobId, preselectJobId, setJobId]);
 
   const { data: candidates, mutate: mutateCandidates } = useSWR(
     jobId ? `/world/jobs/${jobId}/candidates` : null,
@@ -303,7 +304,8 @@ export default function RecruiterCopilot() {
     setSelectedCand(null);
     setPlan(null);
     setExecResult(null);
-  }, [jobId]);
+    // Setters are stable identities; listed for lint completeness.
+  }, [jobId, setSelectedCand, setPlan, setExecResult]);
 
   const { data: recs, mutate: mutateRecs } = useSWR(
     jobId ? `/intelligence/hiring/${jobId}?top_n=5` : null,

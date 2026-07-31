@@ -77,14 +77,14 @@ async def screen_candidate(world: WorldState, candidate_id: str,
                         "score": score, "notes": note})
 
     weighted_total = round(weighted_total, 3)
+    # Default init so static analyzers never see a possibly-unbound var.
+    recommendation, band = "reject", "WEAK"
     if weighted_total >= 0.75:
         recommendation, band = "advance_to_technical", "STRONG"
     elif weighted_total >= 0.6:
         recommendation, band = "advance_to_phone_screen", "GOOD"
     elif weighted_total >= 0.5:
         recommendation, band = "hold_for_more_signal", "MIXED"
-    else:
-        recommendation, band = "reject", "WEAK"
 
     return {
         "candidate_id": candidate_id,
