@@ -35,6 +35,7 @@ const DeepDive = React.lazy(() => import("@/pages/DeepDive"));
 const ATSOperations = React.lazy(() => import("@/pages/ATSOperations"));
 const ATSAutonomy = React.lazy(() => import("@/pages/ATSAutonomy"));
 const EnterpriseControls = React.lazy(() => import("@/pages/EnterpriseControls"));
+const CareerSite = React.lazy(() => import("@/pages/CareerSite"));
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -86,6 +87,7 @@ function AppRouter() {
     <React.Suspense fallback={<div className="min-h-screen bg-slate-950 text-slate-500 flex items-center justify-center font-mono text-sm"><span className="animate-pulse">Loading EAROS workspace…</span></div>}>
       <Routes>
         <Route path="/" element={<Landing />} />
+        <Route path="/careers" element={<CareerSite />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
         {ROUTES.map(([path, Comp]) => (
           <Route

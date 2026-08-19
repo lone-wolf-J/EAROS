@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { COLLABORATION_GUARDRAILS, HIRING_DECISION_GUARDRAILS, TABS, formatDate } from "./ATSOperations";
 import { WORKFLOW_DEFINITIONS } from "./ATSAutonomy";
 import { CONTROL_PANELS, canManageEnterpriseControls } from "./EnterpriseControls";
+import { CAREER_SITE_GUARDRAILS } from "./CareerSite";
+import { CAREER_INTAKE_GUARDRAILS } from "@/components/CareerIntakeManager";
 
 describe("ATS Operations route contract", () => {
   it("keeps the enterprise records workbench focused on core ATS workstreams", () => {
@@ -63,5 +65,23 @@ describe("ATS Operations route contract", () => {
     expect(canManageEnterpriseControls({ role: "recruiter" })).toBe(false);
     expect(canManageEnterpriseControls({ role: "hiring_manager" })).toBe(false);
     expect(canManageEnterpriseControls(null)).toBe(false);
+  });
+
+  it("keeps public career-site intake consented, canonical, and free of outbound automation", () => {
+    expect(CAREER_SITE_GUARDRAILS).toEqual([
+      "only_enabled_open_requisitions_are_listed",
+      "recruiting_consent_is_required_before_submission",
+      "candidate_and_application_records_use_canonical_ats_models",
+      "submission_never_triggers_outbound_automation",
+    ]);
+  });
+
+  it("keeps career-site launch and referral intake explicitly enabled, attributable, and record-only", () => {
+    expect(CAREER_INTAKE_GUARDRAILS).toEqual([
+      "career_site_link_requires_published_and_enabled_requisition",
+      "referral_submission_requires_explicit_intake_enablement",
+      "referral_source_and_referrer_are_recorded_server_side",
+      "intake_controls_do_not_trigger_outbound_automation",
+    ]);
   });
 });

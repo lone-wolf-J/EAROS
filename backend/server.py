@@ -696,6 +696,35 @@ class ApplicationCreateRequest(BaseModel):
     referral_user_id: Optional[str] = None
 
 
+class CareerSiteApplicationRequest(BaseModel):
+    """Public data accepted only for an explicitly enabled career-site requisition."""
+    organization_id: str = Field(min_length=3, max_length=200)
+    full_name: str = Field(min_length=2, max_length=200)
+    email: Optional[str] = Field(default=None, max_length=320)
+    phone: Optional[str] = Field(default=None, max_length=64)
+    linkedin_url: Optional[str] = Field(default=None, max_length=1000)
+    location: str = Field(default="", max_length=200)
+    current_title: str = Field(default="", max_length=200)
+    current_company: str = Field(default="", max_length=200)
+    years_experience: float = Field(default=0, ge=0, le=100)
+    skills: list[str] = Field(default_factory=list, max_length=250)
+    consent_to_recruit: bool = False
+
+
+class ReferralIntakeRequest(BaseModel):
+    full_name: str = Field(min_length=2, max_length=200)
+    email: Optional[str] = Field(default=None, max_length=320)
+    phone: Optional[str] = Field(default=None, max_length=64)
+    linkedin_url: Optional[str] = Field(default=None, max_length=1000)
+    location: str = Field(default="", max_length=200)
+    current_title: str = Field(default="", max_length=200)
+    current_company: str = Field(default="", max_length=200)
+    years_experience: float = Field(default=0, ge=0, le=100)
+    skills: list[str] = Field(default_factory=list, max_length=250)
+    referrer_user_id: str = Field(min_length=3, max_length=200)
+    note: Optional[str] = Field(default=None, max_length=2000)
+
+
 @app.get("/api/ats/applications")
 async def list_ats_applications(
     requisition_id: Optional[str] = None,
@@ -746,6 +775,191 @@ async def create_ats_application(req: ApplicationCreateRequest, user: AppUser = 
         payload={"candidate_id": application.candidate_id},
     ))
     return application.model_dump()
+
+
+def _career_site_requisition_is_open(requisition: Requisition) -> bool:
+    """Public submissions require an explicitly enabled, open, non-archived requisition."""
+    approval_status = getattr(requisition.approval_status, "value", requisition.approval_status)
+    return bool(
+        requisition.career_site_enabled
+        and requisition.internal_publication_status == "published"
+        and approval_status == "open"
+        and not requisition.archived_at
+    )
+
+
+@app.get("/api/public/ats/career-sites/{organization_id}/requisitions")
+async def list_public_career_site_requisitions(organization_id: str):
+    """Return only enabled public requisition metadata; never private plans or candidate data."""
+    requisitions = await world.list_requisitions(organization_id)
+    return [
+        {
+            "requisition_id": requisition.requisition_id,
+            "title": requisition.title,
+            "employment_type": requisition.employment_type,
+            "location": requisition.location,
+            "department_id": requisition.department_id,
+            "target_close_date": requisition.target_close_date,
+        }
+        for requisition in requisitions if _career_site_requisition_is_open(requisition)
+    ]
+
+
+@app.post("/api/public/ats/requisitions/{requisition_id}/applications", status_code=201)
+async def submit_career_site_application(requisition_id: str, req: CareerSiteApplicationRequest):
+    """Record a consented public application without triggering automation or outbound contact."""
+    requisition = await world.get_requisition(req.organization_id, requisition_id)
+    if not requisition or not _career_site_requisition_is_open(requisition):
+        raise HTTPException(status_code=404, detail="Career-site requisition not available")
+    if not req.consent_to_recruit:
+        raise HTTPException(status_code=409, detail="Recruiting consent is required before submitting a career-site application")
+    candidate = await world.find_duplicate_candidate(
+        req.organization_id, email=req.email, phone=req.phone, linkedin_url=req.linkedin_url
+    )
+    candidate_created = candidate is None
+    if candidate_created:
+        candidate = await world.upsert_candidate(Candidate(
+            organization_id=req.organization_id,
+            full_name=req.full_name,
+            email=req.email,
+            phone=req.phone,
+            linkedin_url=req.linkedin_url,
+            location=req.location,
+            current_title=req.current_title,
+            current_company=req.current_company,
+            years_experience=req.years_experience,
+            skills=req.skills,
+            source="career_site",
+            source_detail=f"career_site:{requisition_id}",
+        ))
+        await governance.emit(DomainEvent(
+            event_type=EventType.CANDIDATE_CREATED,
+            actor="public:career_site",
+            subject_type="candidate",
+            subject_id=candidate.candidate_id,
+            organization_id=req.organization_id,
+            payload={"source": "career_site", "requisition_id": requisition_id},
+        ))
+        await world.record_activity(ActivityRecord(
+            organization_id=req.organization_id,
+            entity_type="candidate",
+            entity_id=candidate.candidate_id,
+            event_type="candidate.career_site_created",
+            actor_user_id=None,
+            payload={"requisition_id": requisition_id},
+        ))
+    consent = await world.upsert_consent(CandidateConsent(
+        organization_id=req.organization_id,
+        candidate_id=candidate.candidate_id,
+        purpose="recruiting",
+        legal_basis="candidate_submitted_career_site_application",
+        captured_from="career_site",
+        recorded_by_user_id=None,
+    ))
+    existing = await world.list_applications(
+        req.organization_id, candidate_id=candidate.candidate_id, requisition_id=requisition_id
+    )
+    if any(application.status.value == "active" for application in existing):
+        raise HTTPException(status_code=409, detail="An active application already exists for this requisition")
+    now = utcnow_iso()
+    application = await world.upsert_application(Application(
+        organization_id=req.organization_id,
+        candidate_id=candidate.candidate_id,
+        requisition_id=requisition_id,
+        pipeline_id=requisition.pipeline_id,
+        current_stage_name="Applied",
+        source="career_site",
+        source_detail=f"career_site:{requisition_id}",
+        stage_history=[{"stage_id": None, "stage_name": "Applied", "changed_at": now, "actor_user_id": "public:career_site"}],
+    ))
+    await governance.emit(DomainEvent(
+        event_type=EventType.CAREER_SITE_APPLICATION_RECEIVED,
+        actor="public:career_site",
+        subject_type="application",
+        subject_id=application.application_id,
+        organization_id=req.organization_id,
+        payload={"candidate_id": candidate.candidate_id, "requisition_id": requisition_id, "consent_id": consent.consent_id, "candidate_created": candidate_created},
+    ))
+    await world.record_activity(ActivityRecord(
+        organization_id=req.organization_id,
+        entity_type="application",
+        entity_id=application.application_id,
+        event_type="application.career_site_received",
+        actor_user_id=None,
+        payload={"candidate_id": candidate.candidate_id, "requisition_id": requisition_id, "consent_id": consent.consent_id},
+    ))
+    return {"application_id": application.application_id, "received_at": application.applied_at, "status": "received"}
+
+
+@app.post("/api/ats/requisitions/{requisition_id}/referrals", status_code=201)
+async def record_ats_referral_intake(
+    requisition_id: str, req: ReferralIntakeRequest, user: AppUser = Depends(_current_user)
+):
+    """Record an authenticated employee referral; the endpoint never sends outreach."""
+    _require_role(user, Role.ADMIN, Role.RECRUITER, Role.HIRING_MANAGER)
+    requisition = await _scoped_requisition(requisition_id, user)
+    if not requisition.referral_intake_enabled or requisition.archived_at:
+        raise HTTPException(status_code=409, detail="Referral intake is not enabled for this requisition")
+    if user.role == Role.HIRING_MANAGER and req.referrer_user_id != user.user_id:
+        raise HTTPException(status_code=403, detail="Hiring managers may record only their own referrals")
+    referrer = await db.users.find_one(
+        {"user_id": req.referrer_user_id, "organization_id": user.organization_id}, {"_id": 0}
+    )
+    if not referrer:
+        raise HTTPException(status_code=404, detail="Referrer not found in this organization")
+    candidate = await world.find_duplicate_candidate(
+        user.organization_id, email=req.email, phone=req.phone, linkedin_url=req.linkedin_url
+    )
+    candidate_created = candidate is None
+    if candidate_created:
+        candidate = await world.upsert_candidate(Candidate(
+            organization_id=user.organization_id,
+            full_name=req.full_name,
+            email=req.email,
+            phone=req.phone,
+            linkedin_url=req.linkedin_url,
+            location=req.location,
+            current_title=req.current_title,
+            current_company=req.current_company,
+            years_experience=req.years_experience,
+            skills=req.skills,
+            source="referral",
+            source_detail=f"employee_referral:{req.referrer_user_id}",
+        ))
+    existing = await world.list_applications(
+        user.organization_id, candidate_id=candidate.candidate_id, requisition_id=requisition_id
+    )
+    if any(application.status.value == "active" for application in existing):
+        raise HTTPException(status_code=409, detail="An active application already exists for this requisition")
+    now = utcnow_iso()
+    application = await world.upsert_application(Application(
+        organization_id=user.organization_id,
+        candidate_id=candidate.candidate_id,
+        requisition_id=requisition_id,
+        pipeline_id=requisition.pipeline_id,
+        current_stage_name="Applied",
+        source="referral",
+        source_detail=f"employee_referral:{req.referrer_user_id}",
+        referral_user_id=req.referrer_user_id,
+        stage_history=[{"stage_id": None, "stage_name": "Applied", "changed_at": now, "actor_user_id": user.user_id}],
+    ))
+    await governance.emit(DomainEvent(
+        event_type=EventType.REFERRAL_INTAKE_RECORDED,
+        actor=f"user:{user.user_id}",
+        subject_type="application",
+        subject_id=application.application_id,
+        organization_id=user.organization_id,
+        payload={"candidate_id": candidate.candidate_id, "requisition_id": requisition_id, "referrer_user_id": req.referrer_user_id, "candidate_created": candidate_created},
+    ))
+    await world.record_activity(ActivityRecord(
+        organization_id=user.organization_id,
+        entity_type="candidate",
+        entity_id=candidate.candidate_id,
+        event_type="candidate.referral_intake_recorded",
+        actor_user_id=user.user_id,
+        payload={"requisition_id": requisition_id, "application_id": application.application_id, "referrer_user_id": req.referrer_user_id, "note": req.note},
+    ))
+    return {"application": application.model_dump(), "candidate_created": candidate_created}
 
 
 class ApplicationStageRequest(BaseModel):

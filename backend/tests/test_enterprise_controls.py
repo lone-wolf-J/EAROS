@@ -1012,3 +1012,120 @@ def test_recruiter_alert_validates_recipient_within_active_tenant(monkeypatch):
     assert ("user_lookup", "recruiter_alpha", "org_alpha") in calls
     assert ("alert", "org_alpha", "recruiter_alpha", "interview_reminder") in calls
     assert ("event", "org_alpha", "world.recruiter_alert.created", "recruiter_alpha") in calls
+
+
+def test_career_site_application_requires_consent_and_creates_canonical_records(monkeypatch):
+    calls = []
+    requisition = server.Requisition(
+        organization_id="org_alpha",
+        title="Platform Engineer",
+        approval_status="open",
+        internal_publication_status="published",
+        career_site_enabled=True,
+    )
+
+    class _World:
+        async def get_requisition(self, organization_id, requisition_id):
+            calls.append(("requisition", organization_id, requisition_id))
+            return requisition
+
+        async def find_duplicate_candidate(self, *_args, **_kwargs):
+            return None
+
+        async def upsert_candidate(self, candidate):
+            calls.append(("candidate", candidate.source, candidate.source_detail))
+            return candidate
+
+        async def upsert_consent(self, consent):
+            calls.append(("consent", consent.purpose, consent.captured_from))
+            return consent
+
+        async def list_applications(self, *_args, **_kwargs):
+            return []
+
+        async def upsert_application(self, application):
+            calls.append(("application", application.source, application.requisition_id))
+            return application
+
+        async def record_activity(self, activity):
+            calls.append(("activity", activity.event_type, activity.entity_type))
+            return activity
+
+    class _Governance:
+        async def emit(self, event):
+            calls.append(("event", event.event_type.value, event.actor))
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    rejected = server.CareerSiteApplicationRequest(
+        organization_id="org_alpha", full_name="Casey Candidate", email="casey@example.test"
+    )
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(server.submit_career_site_application(requisition.requisition_id, rejected))
+    assert exc.value.status_code == 409
+
+    accepted = server.CareerSiteApplicationRequest(
+        organization_id="org_alpha", full_name="Casey Candidate", email="casey@example.test", consent_to_recruit=True
+    )
+    result = asyncio.run(server.submit_career_site_application(requisition.requisition_id, accepted))
+
+    assert result["status"] == "received"
+    assert ("candidate", "career_site", f"career_site:{requisition.requisition_id}") in calls
+    assert ("consent", "recruiting", "career_site") in calls
+    assert ("application", "career_site", requisition.requisition_id) in calls
+    assert ("event", "world.career_site_application.received", "public:career_site") in calls
+
+
+def test_referral_intake_requires_enabled_requisition_and_validates_referrer(monkeypatch):
+    calls = []
+    requisition = server.Requisition(
+        organization_id="org_alpha", title="Platform Engineer", approval_status="open", referral_intake_enabled=True
+    )
+
+    class _World:
+        async def find_duplicate_candidate(self, *_args, **_kwargs):
+            return None
+
+        async def upsert_candidate(self, candidate):
+            calls.append(("candidate", candidate.source, candidate.source_detail))
+            return candidate
+
+        async def list_applications(self, *_args, **_kwargs):
+            return []
+
+        async def upsert_application(self, application):
+            calls.append(("application", application.source, application.referral_user_id))
+            return application
+
+        async def record_activity(self, activity):
+            calls.append(("activity", activity.event_type, activity.payload["referrer_user_id"]))
+            return activity
+
+    class _Users:
+        async def find_one(self, query, _projection):
+            calls.append(("referrer_lookup", query["user_id"], query["organization_id"]))
+            return {"user_id": query["user_id"], "organization_id": query["organization_id"]}
+
+    class _Governance:
+        async def emit(self, event):
+            calls.append(("event", event.event_type.value, event.payload["referrer_user_id"]))
+
+    async def _scoped_requisition(*_args):
+        return requisition
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    monkeypatch.setattr(server, "db", SimpleNamespace(users=_Users()))
+    monkeypatch.setattr(server, "_scoped_requisition", _scoped_requisition)
+    user = SimpleNamespace(user_id="manager_alpha", organization_id="org_alpha", role=Role.HIRING_MANAGER)
+    request = server.ReferralIntakeRequest(
+        full_name="Taylor Referral", email="taylor@example.test", referrer_user_id="manager_alpha"
+    )
+
+    result = asyncio.run(server.record_ats_referral_intake(requisition.requisition_id, request, user))
+
+    assert result["candidate_created"] is True
+    assert ("referrer_lookup", "manager_alpha", "org_alpha") in calls
+    assert ("candidate", "referral", "employee_referral:manager_alpha") in calls
+    assert ("application", "referral", "manager_alpha") in calls
+    assert ("event", "world.referral_intake.recorded", "manager_alpha") in calls
