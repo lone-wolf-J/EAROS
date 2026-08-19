@@ -17,6 +17,7 @@ from foundation import (
     ApplicationStatus,
     AuditExportStatus,
     ConsentStatus,
+    DataSubjectRequestStatus,
     InterviewStatus,
     JobStatus,
     OnboardingHandoffStatus,
@@ -32,6 +33,7 @@ from foundation import (
     new_candidate_notification_delivery_id,
     new_communication_id,
     new_consent_id,
+    new_data_subject_request_id,
     new_department_id,
     new_feedback_id,
     new_hiring_decision_id,
@@ -504,6 +506,31 @@ class AuditExportManifest(BaseModel):
     status: AuditExportStatus = AuditExportStatus.REQUESTED
     storage_key: Optional[str] = None
     expires_at: Optional[str] = None
+    created_at: str = Field(default_factory=utcnow_iso)
+    updated_at: str = Field(default_factory=utcnow_iso)
+
+
+class DataSubjectRequest(BaseModel):
+    """A human-reviewed access, correction, or erasure request for one candidate.
+
+    The record itself never performs a destructive action. Erasure must progress
+    through the separate policy-gated retention lifecycle before fulfillment.
+    """
+    model_config = ConfigDict(extra="ignore")
+    data_subject_request_id: str = Field(default_factory=new_data_subject_request_id)
+    organization_id: str
+    candidate_id: str
+    request_type: str  # access | correction | erasure
+    request_summary: str
+    intake_channel: str = "staff_recorded"
+    requested_by_user_id: str
+    status: DataSubjectRequestStatus = DataSubjectRequestStatus.PENDING_REVIEW
+    reviewed_by_user_id: Optional[str] = None
+    review_note: Optional[str] = None
+    retention_case_id: Optional[str] = None
+    audit_export_id: Optional[str] = None
+    fulfilled_by_user_id: Optional[str] = None
+    fulfilled_at: Optional[str] = None
     created_at: str = Field(default_factory=utcnow_iso)
     updated_at: str = Field(default_factory=utcnow_iso)
 
@@ -1339,6 +1366,102 @@ class WorldState:
             {"organization_id": organization_id}, {"_id": 0}
         ).sort("created_at", -1).to_list(1000)
         return [AuditExportManifest(**doc) for doc in docs]
+
+    async def create_data_subject_request(self, request: DataSubjectRequest) -> DataSubjectRequest:
+        await self.db.data_subject_requests.update_one(
+            {"organization_id": request.organization_id, "data_subject_request_id": request.data_subject_request_id},
+            {"$set": request.model_dump()},
+            upsert=True,
+        )
+        return request
+
+    async def get_data_subject_request(
+        self, organization_id: str, data_subject_request_id: str
+    ) -> Optional[DataSubjectRequest]:
+        doc = await self.db.data_subject_requests.find_one(
+            {"organization_id": organization_id, "data_subject_request_id": data_subject_request_id}, {"_id": 0}
+        )
+        return DataSubjectRequest(**doc) if doc else None
+
+    async def list_data_subject_requests(
+        self, organization_id: str, status: Optional[DataSubjectRequestStatus] = None
+    ) -> list[DataSubjectRequest]:
+        query: dict[str, Any] = {"organization_id": organization_id}
+        if status:
+            query["status"] = status.value
+        docs = await self.db.data_subject_requests.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+        return [DataSubjectRequest(**doc) for doc in docs]
+
+    async def decide_data_subject_request(
+        self,
+        organization_id: str,
+        data_subject_request_id: str,
+        *,
+        status: DataSubjectRequestStatus,
+        reviewed_by_user_id: str,
+        review_note: Optional[str] = None,
+    ) -> Optional[DataSubjectRequest]:
+        if status not in {DataSubjectRequestStatus.ON_HOLD, DataSubjectRequestStatus.APPROVED, DataSubjectRequestStatus.REJECTED}:
+            raise ValueError("data-subject decision must be a review outcome")
+        now = utcnow_iso()
+        result = await self.db.data_subject_requests.update_one(
+            {
+                "organization_id": organization_id,
+                "data_subject_request_id": data_subject_request_id,
+                "status": DataSubjectRequestStatus.PENDING_REVIEW.value,
+            },
+            {"$set": {
+                "status": status.value,
+                "reviewed_by_user_id": reviewed_by_user_id,
+                "review_note": review_note,
+                "updated_at": now,
+            }},
+        )
+        if result.matched_count != 1:
+            return None
+        return await self.get_data_subject_request(organization_id, data_subject_request_id)
+
+    async def link_data_subject_request_artifact(
+        self,
+        organization_id: str,
+        data_subject_request_id: str,
+        *,
+        retention_case_id: Optional[str] = None,
+        audit_export_id: Optional[str] = None,
+    ) -> Optional[DataSubjectRequest]:
+        update: dict[str, Any] = {"updated_at": utcnow_iso()}
+        if retention_case_id:
+            update["retention_case_id"] = retention_case_id
+        if audit_export_id:
+            update["audit_export_id"] = audit_export_id
+        result = await self.db.data_subject_requests.update_one(
+            {"organization_id": organization_id, "data_subject_request_id": data_subject_request_id},
+            {"$set": update},
+        )
+        if result.matched_count != 1:
+            return None
+        return await self.get_data_subject_request(organization_id, data_subject_request_id)
+
+    async def fulfill_data_subject_request(
+        self, organization_id: str, data_subject_request_id: str, *, fulfilled_by_user_id: str
+    ) -> Optional[DataSubjectRequest]:
+        now = utcnow_iso()
+        result = await self.db.data_subject_requests.update_one(
+            {
+                "organization_id": organization_id,
+                "data_subject_request_id": data_subject_request_id,
+                "status": DataSubjectRequestStatus.APPROVED.value,
+            },
+            {"$set": {
+                "status": DataSubjectRequestStatus.FULFILLED.value,
+                "fulfilled_by_user_id": fulfilled_by_user_id,
+                "fulfilled_at": now,
+                "updated_at": now,
+            }},
+        )
+        if result.matched_count != 1:
+            return None
+        return await self.get_data_subject_request(organization_id, data_subject_request_id)
 
     # onboarding handoff records — durable transfer metadata, never sensitive employee data
     async def upsert_onboarding_handoff(self, handoff: OnboardingHandoff) -> OnboardingHandoff:

@@ -58,6 +58,7 @@ def new_onboarding_handoff_id() -> str: return _new_id("handoff")
 def new_notification_preference_id() -> str: return _new_id("notifpref")
 def new_candidate_notification_delivery_id() -> str: return _new_id("candnotif")
 def new_recruiter_alert_id() -> str: return _new_id("alert")
+def new_data_subject_request_id() -> str: return _new_id("dsr")
 
 
 def utcnow() -> datetime:
@@ -159,6 +160,14 @@ class AuditExportStatus(str, Enum):
     EXPIRED = "expired"
 
 
+class DataSubjectRequestStatus(str, Enum):
+    PENDING_REVIEW = "pending_review"
+    ON_HOLD = "on_hold"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    FULFILLED = "fulfilled"
+
+
 class OnboardingHandoffStatus(str, Enum):
     DRAFT = "draft"
     READY_FOR_HANDOFF = "ready_for_handoff"
@@ -230,6 +239,9 @@ class EventType(str, Enum):
     RETENTION_CASE_DECIDED = "world.retention_case.decided"
     RETENTION_ARCHIVE_COMPLETED = "world.retention.archive_completed"
     RETENTION_ERASURE_COMPLETED = "world.retention.erasure_completed"
+    DATA_SUBJECT_REQUESTED = "world.data_subject_request.requested"
+    DATA_SUBJECT_REQUEST_DECIDED = "world.data_subject_request.decided"
+    DATA_SUBJECT_REQUEST_FULFILLED = "world.data_subject_request.fulfilled"
     AUDIT_EXPORT_REQUESTED = "governance.audit_export.requested"
     ONBOARDING_HANDOFF_CREATED = "world.onboarding_handoff.created"
     ONBOARDING_HANDOFF_UPDATED = "world.onboarding_handoff.updated"

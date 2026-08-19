@@ -34,6 +34,7 @@ load_dotenv(ROOT_DIR / ".env")
 from applications.auth import AppUser, build_router as build_auth_router, get_current_user
 from foundation import (
     AuditExportStatus,
+    DataSubjectRequestStatus,
     DomainEvent,
     EventType,
     ExecutionStatus,
@@ -96,6 +97,7 @@ from platform_core.world import (
     CandidateCommunication,
     CandidateConsent,
     CollaborationMention,
+    DataSubjectRequest,
     HiringDecision,
     Interview,
     InterviewFeedback,
@@ -1828,6 +1830,182 @@ async def decide_approval(
 # ============================================================
 #   ENTERPRISE CONTROLS — retention, audit export, readiness
 # ============================================================
+
+class CreateDataSubjectRequestRequest(BaseModel):
+    candidate_id: str = Field(min_length=3, max_length=128)
+    request_type: str = Field(pattern="^(access|correction|erasure)$")
+    request_summary: str = Field(min_length=10, max_length=4_000)
+    intake_channel: str = Field(default="staff_recorded", min_length=2, max_length=100)
+
+
+class DecideDataSubjectRequestRequest(BaseModel):
+    decision: str = Field(pattern="^(approved|rejected|on_hold)$")
+    note: Optional[str] = Field(default=None, max_length=2_000)
+
+
+@app.get("/api/enterprise/data-subject-requests")
+async def list_data_subject_requests(
+    status: Optional[str] = None, user: AppUser = Depends(_current_user)
+):
+    _require_role(user, Role.ADMIN)
+    try:
+        parsed_status = DataSubjectRequestStatus(status) if status else None
+    except ValueError as exc:
+        raise HTTPException(400, "invalid data-subject request status") from exc
+    requests = await world.list_data_subject_requests(user.organization_id, parsed_status)
+    return [request.model_dump() for request in requests]
+
+
+@app.post("/api/enterprise/data-subject-requests")
+async def create_data_subject_request(
+    req: CreateDataSubjectRequestRequest, user: AppUser = Depends(_current_user)
+):
+    _require_role(user, Role.ADMIN, Role.RECRUITER)
+    await _scoped_candidate(req.candidate_id, user)
+    request = await world.create_data_subject_request(DataSubjectRequest(
+        organization_id=user.organization_id,
+        candidate_id=req.candidate_id,
+        request_type=req.request_type,
+        request_summary=req.request_summary,
+        intake_channel=req.intake_channel,
+        requested_by_user_id=user.user_id,
+    ))
+    await governance.emit(DomainEvent(
+        event_type=EventType.DATA_SUBJECT_REQUESTED,
+        actor=f"user:{user.user_id}",
+        subject_type="candidate",
+        subject_id=request.candidate_id,
+        organization_id=user.organization_id,
+        payload={"data_subject_request_id": request.data_subject_request_id, "request_type": request.request_type, "intake_channel": request.intake_channel},
+        correlation_id=request.data_subject_request_id,
+    ))
+    await world.record_activity(ActivityRecord(
+        organization_id=user.organization_id,
+        entity_type="candidate",
+        entity_id=request.candidate_id,
+        event_type="data_subject_request.requested",
+        actor_user_id=user.user_id,
+        payload={"data_subject_request_id": request.data_subject_request_id, "request_type": request.request_type},
+        correlation_id=request.data_subject_request_id,
+    ))
+    return request.model_dump()
+
+
+@app.post("/api/enterprise/data-subject-requests/{data_subject_request_id}/decide")
+async def decide_data_subject_request(
+    data_subject_request_id: str,
+    req: DecideDataSubjectRequestRequest,
+    user: AppUser = Depends(_current_user),
+):
+    _require_role(user, Role.ADMIN)
+    existing = await world.get_data_subject_request(user.organization_id, data_subject_request_id)
+    if not existing:
+        raise HTTPException(404, "data-subject request not found")
+    if existing.status != DataSubjectRequestStatus.PENDING_REVIEW:
+        raise HTTPException(409, "data-subject request has already been reviewed")
+    decision = DataSubjectRequestStatus(req.decision)
+    request = await world.decide_data_subject_request(
+        user.organization_id,
+        data_subject_request_id,
+        status=decision,
+        reviewed_by_user_id=user.user_id,
+        review_note=req.note,
+    )
+    if not request:
+        raise HTTPException(409, "data-subject request could not be reviewed")
+
+    if request.status == DataSubjectRequestStatus.APPROVED and request.request_type == "erasure":
+        retention_case = await world.create_retention_case(RetentionCase(
+            organization_id=user.organization_id,
+            subject_type="candidate",
+            subject_id=request.candidate_id,
+            requested_action="erase",
+            reason=f"Approved data-subject erasure request {request.data_subject_request_id}: {request.request_summary}",
+            requested_by_user_id=user.user_id,
+        ))
+        request = await world.link_data_subject_request_artifact(
+            user.organization_id,
+            request.data_subject_request_id,
+            retention_case_id=retention_case.retention_case_id,
+        ) or request
+    if request.status == DataSubjectRequestStatus.APPROVED and request.request_type == "access":
+        events = await governance.list_events(
+            organization_id=user.organization_id, subject_id=request.candidate_id, limit=500
+        )
+        manifest = await world.create_audit_export_manifest(AuditExportManifest(
+            organization_id=user.organization_id,
+            requested_by_user_id=user.user_id,
+            filters={"kind": "data_subject_access", "candidate_id": request.candidate_id, "limit": 500},
+            event_count=len(events),
+            status=AuditExportStatus.READY,
+        ))
+        request = await world.link_data_subject_request_artifact(
+            user.organization_id,
+            request.data_subject_request_id,
+            audit_export_id=manifest.audit_export_id,
+        ) or request
+
+    await governance.emit(DomainEvent(
+        event_type=EventType.DATA_SUBJECT_REQUEST_DECIDED,
+        actor=f"user:{user.user_id}",
+        subject_type="candidate",
+        subject_id=request.candidate_id,
+        organization_id=user.organization_id,
+        payload={"data_subject_request_id": request.data_subject_request_id, "request_type": request.request_type, "decision": request.status.value, "retention_case_id": request.retention_case_id, "audit_export_id": request.audit_export_id},
+        correlation_id=request.data_subject_request_id,
+    ))
+    await world.record_activity(ActivityRecord(
+        organization_id=user.organization_id,
+        entity_type="candidate",
+        entity_id=request.candidate_id,
+        event_type="data_subject_request.decided",
+        actor_user_id=user.user_id,
+        payload={"data_subject_request_id": request.data_subject_request_id, "decision": request.status.value, "request_type": request.request_type},
+        correlation_id=request.data_subject_request_id,
+    ))
+    return request.model_dump()
+
+
+@app.post("/api/enterprise/data-subject-requests/{data_subject_request_id}/fulfill")
+async def fulfill_data_subject_request(
+    data_subject_request_id: str, user: AppUser = Depends(_current_user)
+):
+    _require_role(user, Role.ADMIN)
+    request = await world.get_data_subject_request(user.organization_id, data_subject_request_id)
+    if not request:
+        raise HTTPException(404, "data-subject request not found")
+    if request.status != DataSubjectRequestStatus.APPROVED:
+        raise HTTPException(409, "data-subject request requires approved review before fulfillment")
+    if request.request_type == "erasure":
+        if not request.retention_case_id:
+            raise HTTPException(409, "approved erasure request requires a linked retention case")
+        retention_case = await world.get_retention_case(user.organization_id, request.retention_case_id)
+        if not retention_case or retention_case.status != RetentionCaseStatus.COMPLETED:
+            raise HTTPException(409, "erasure fulfillment requires completed policy-gated retention execution")
+    fulfilled = await world.fulfill_data_subject_request(
+        user.organization_id, data_subject_request_id, fulfilled_by_user_id=user.user_id
+    )
+    if not fulfilled:
+        raise HTTPException(409, "data-subject request could not be fulfilled")
+    await governance.emit(DomainEvent(
+        event_type=EventType.DATA_SUBJECT_REQUEST_FULFILLED,
+        actor=f"user:{user.user_id}",
+        subject_type="candidate",
+        subject_id=fulfilled.candidate_id,
+        organization_id=user.organization_id,
+        payload={"data_subject_request_id": fulfilled.data_subject_request_id, "request_type": fulfilled.request_type, "retention_case_id": fulfilled.retention_case_id, "audit_export_id": fulfilled.audit_export_id},
+        correlation_id=fulfilled.data_subject_request_id,
+    ))
+    await world.record_activity(ActivityRecord(
+        organization_id=user.organization_id,
+        entity_type="candidate",
+        entity_id=fulfilled.candidate_id,
+        event_type="data_subject_request.fulfilled",
+        actor_user_id=user.user_id,
+        payload={"data_subject_request_id": fulfilled.data_subject_request_id, "request_type": fulfilled.request_type},
+        correlation_id=fulfilled.data_subject_request_id,
+    ))
+    return fulfilled.model_dump()
 
 class CreateRetentionCaseRequest(BaseModel):
     subject_type: str

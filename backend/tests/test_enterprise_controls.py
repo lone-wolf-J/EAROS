@@ -11,12 +11,12 @@ os.environ.setdefault("MONGO_URL", "mongodb://127.0.0.1:27017")
 os.environ.setdefault("DB_NAME", "earos_contract_tests")
 
 import server
-from foundation import ApplicationStatus, AuditExportStatus, ExecutionStatus, RetentionCaseStatus, Role
+from foundation import ApplicationStatus, AuditExportStatus, DataSubjectRequestStatus, ExecutionStatus, RetentionCaseStatus, Role
 from platform_core.capabilities import build_default_registry
 from platform_core.governance import Governance
 from platform_core.policy import PolicyEngine
 from platform_core.runtime import Runtime
-from platform_core.world import AuditExportManifest, Candidate, Requisition, RetentionCase
+from platform_core.world import AuditExportManifest, Candidate, DataSubjectRequest, Requisition, RetentionCase
 from test_governed_ats_capabilities import MemoryDB
 
 
@@ -1129,3 +1129,123 @@ def test_referral_intake_requires_enabled_requisition_and_validates_referrer(mon
     assert ("candidate", "referral", "employee_referral:manager_alpha") in calls
     assert ("application", "referral", "manager_alpha") in calls
     assert ("event", "world.referral_intake.recorded", "manager_alpha") in calls
+
+
+def test_data_subject_access_request_is_tenant_scoped_reviewed_and_linked_to_an_audit_manifest(monkeypatch):
+    calls = []
+    candidate = Candidate(
+        organization_id="org_alpha", full_name="Casey Candidate", email="casey@example.test"
+    )
+    request = DataSubjectRequest(
+        organization_id="org_alpha",
+        candidate_id=candidate.candidate_id,
+        request_type="access",
+        request_summary="Candidate requested an export of recruiting records and activity history.",
+        requested_by_user_id="recruiter_alpha",
+    )
+
+    class _World:
+        async def get_candidate(self, candidate_id):
+            calls.append(("candidate", candidate_id))
+            return candidate if candidate_id == candidate.candidate_id else None
+
+        async def create_data_subject_request(self, created):
+            calls.append(("create", created.organization_id, created.request_type))
+            return request
+
+        async def get_data_subject_request(self, organization_id, request_id):
+            calls.append(("get", organization_id, request_id))
+            return request if (organization_id, request_id) == ("org_alpha", request.data_subject_request_id) else None
+
+        async def decide_data_subject_request(self, organization_id, request_id, **kwargs):
+            calls.append(("decide", organization_id, request_id, kwargs["status"].value))
+            request.status = kwargs["status"]
+            request.reviewed_by_user_id = kwargs["reviewed_by_user_id"]
+            return request
+
+        async def create_audit_export_manifest(self, manifest):
+            calls.append(("manifest", manifest.organization_id, manifest.filters["kind"]))
+            manifest.status = AuditExportStatus.READY
+            return manifest
+
+        async def link_data_subject_request_artifact(self, organization_id, request_id, **kwargs):
+            calls.append(("link", organization_id, request_id, kwargs["audit_export_id"]))
+            request.audit_export_id = kwargs["audit_export_id"]
+            return request
+
+        async def record_activity(self, activity):
+            calls.append(("activity", activity.organization_id, activity.event_type, activity.entity_id))
+            return activity
+
+    class _Governance:
+        async def list_events(self, organization_id, subject_id, limit):
+            calls.append(("events", organization_id, subject_id, limit))
+            return []
+
+        async def emit(self, event):
+            calls.append(("event", event.event_type.value, event.organization_id))
+            return event
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    recruiter = SimpleNamespace(user_id="recruiter_alpha", organization_id="org_alpha", role=Role.RECRUITER)
+    admin = SimpleNamespace(user_id="admin_alpha", organization_id="org_alpha", role=Role.ADMIN)
+
+    created = asyncio.run(server.create_data_subject_request(
+        server.CreateDataSubjectRequestRequest(
+            candidate_id=candidate.candidate_id,
+            request_type="access",
+            request_summary=request.request_summary,
+        ),
+        recruiter,
+    ))
+    decided = asyncio.run(server.decide_data_subject_request(
+        request.data_subject_request_id,
+        server.DecideDataSubjectRequestRequest(decision="approved", note="Identity and request scope verified."),
+        admin,
+    ))
+
+    assert created["organization_id"] == "org_alpha"
+    assert decided["status"] == DataSubjectRequestStatus.APPROVED.value
+    assert decided["audit_export_id"].startswith("auditexp_")
+    assert ("create", "org_alpha", "access") in calls
+    assert ("manifest", "org_alpha", "data_subject_access") in calls
+    assert ("activity", "org_alpha", "data_subject_request.requested", candidate.candidate_id) in calls
+    assert ("activity", "org_alpha", "data_subject_request.decided", candidate.candidate_id) in calls
+
+
+def test_data_subject_erasure_cannot_be_marked_fulfilled_before_policy_gated_retention_execution(monkeypatch):
+    request = DataSubjectRequest(
+        organization_id="org_alpha",
+        candidate_id="cand_alpha",
+        request_type="erasure",
+        request_summary="Candidate requested erasure of personal recruiting data after identity verification.",
+        requested_by_user_id="recruiter_alpha",
+        status=DataSubjectRequestStatus.APPROVED,
+        retention_case_id="ret_alpha",
+    )
+
+    class _World:
+        async def get_data_subject_request(self, organization_id, request_id):
+            return request if (organization_id, request_id) == ("org_alpha", request.data_subject_request_id) else None
+
+        async def get_retention_case(self, organization_id, retention_case_id):
+            return RetentionCase(
+                organization_id=organization_id,
+                retention_case_id=retention_case_id,
+                subject_type="candidate",
+                subject_id="cand_alpha",
+                requested_action="erase",
+                reason="Approved data-subject erasure request.",
+                requested_by_user_id="admin_alpha",
+                status=RetentionCaseStatus.APPROVED_FOR_ERASURE,
+            )
+
+    monkeypatch.setattr(server, "world", _World())
+    admin = SimpleNamespace(user_id="admin_alpha", organization_id="org_alpha", role=Role.ADMIN)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(server.fulfill_data_subject_request(request.data_subject_request_id, admin))
+
+    assert exc.value.status_code == 409
+    assert "policy-gated retention execution" in exc.value.detail

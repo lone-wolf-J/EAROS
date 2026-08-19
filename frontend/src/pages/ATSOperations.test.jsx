@@ -4,6 +4,7 @@ import { WORKFLOW_DEFINITIONS } from "./ATSAutonomy";
 import { CONTROL_PANELS, canManageEnterpriseControls } from "./EnterpriseControls";
 import { CAREER_SITE_GUARDRAILS } from "./CareerSite";
 import { CAREER_INTAKE_GUARDRAILS } from "@/components/CareerIntakeManager";
+import { DATA_SUBJECT_GUARDRAILS } from "@/components/DataSubjectRequests";
 
 describe("ATS Operations route contract", () => {
   it("keeps the enterprise records workbench focused on core ATS workstreams", () => {
@@ -55,6 +56,7 @@ describe("ATS Operations route contract", () => {
       "overview",
       "retention",
       "audit",
+      "data-rights",
       "notifications",
       "administration",
     ]);
@@ -82,6 +84,15 @@ describe("ATS Operations route contract", () => {
       "referral_submission_requires_explicit_intake_enablement",
       "referral_source_and_referrer_are_recorded_server_side",
       "intake_controls_do_not_trigger_outbound_automation",
+    ]);
+  });
+
+  it("keeps data-subject requests tenant-scoped, reviewable, and retention-safe", () => {
+    expect(DATA_SUBJECT_GUARDRAILS).toEqual([
+      "requests_are_tenant_scoped_and_human_reviewed",
+      "access_requests_link_to_auditable_export_manifests",
+      "erasure_requests_require_policy_gated_retention_execution",
+      "no_direct_candidate_data_mutation_from_request_intake",
     ]);
   });
 });
