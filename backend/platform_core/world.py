@@ -29,6 +29,7 @@ from foundation import (
     new_application_id,
     new_candidate_id,
     new_candidate_tag_id,
+    new_candidate_notification_delivery_id,
     new_communication_id,
     new_consent_id,
     new_department_id,
@@ -38,6 +39,7 @@ from foundation import (
     new_job_id,
     new_mention_id,
     new_notification_preference_id,
+    new_recruiter_alert_id,
     new_offer_id,
     new_onboarding_handoff_id,
     new_organization_id,
@@ -197,6 +199,40 @@ class NotificationPreference(BaseModel):
     provider_delivery_state: str = "not_configured"
     created_at: str = Field(default_factory=utcnow_iso)
     updated_at: str = Field(default_factory=utcnow_iso)
+
+
+class CandidateNotificationDelivery(BaseModel):
+    """Auditable candidate-notification intent. It never implies provider delivery."""
+    model_config = ConfigDict(extra="ignore")
+    candidate_notification_delivery_id: str = Field(default_factory=new_candidate_notification_delivery_id)
+    organization_id: str
+    candidate_id: str
+    notification_type: str
+    channel: str = "email"
+    subject: Optional[str] = None
+    body: Optional[str] = None
+    delivery_state: str = "not_delivered"  # awaiting explicit provider configuration
+    delivery_reason: str = "provider_not_configured"
+    consent_id: Optional[str] = None
+    created_by_user_id: Optional[str] = None
+    created_at: str = Field(default_factory=utcnow_iso)
+
+
+class RecruiterAlert(BaseModel):
+    """Tenant-scoped in-app alert; recipients must be organization users."""
+    model_config = ConfigDict(extra="ignore")
+    recruiter_alert_id: str = Field(default_factory=new_recruiter_alert_id)
+    organization_id: str
+    recipient_user_id: str
+    alert_type: str
+    title: str
+    body: Optional[str] = None
+    entity_type: Optional[str] = None
+    entity_id: Optional[str] = None
+    status: str = "unread"
+    created_by_user_id: Optional[str] = None
+    created_at: str = Field(default_factory=utcnow_iso)
+    read_at: Optional[str] = None
 
 
 class Candidate(BaseModel):
@@ -665,6 +701,45 @@ class WorldState:
             upsert=True,
         )
         return preference
+
+    async def record_candidate_notification_delivery(
+        self, delivery: CandidateNotificationDelivery
+    ) -> CandidateNotificationDelivery:
+        await self.db.candidate_notification_deliveries.insert_one(delivery.model_dump())
+        return delivery
+
+    async def list_candidate_notification_deliveries(
+        self, organization_id: str, candidate_id: str
+    ) -> list[CandidateNotificationDelivery]:
+        docs = await self.db.candidate_notification_deliveries.find(
+            {"organization_id": organization_id, "candidate_id": candidate_id}, {"_id": 0}
+        ).sort("created_at", -1).to_list(200)
+        return [CandidateNotificationDelivery(**doc) for doc in docs]
+
+    async def create_recruiter_alert(self, alert: RecruiterAlert) -> RecruiterAlert:
+        await self.db.recruiter_alerts.insert_one(alert.model_dump())
+        return alert
+
+    async def list_recruiter_alerts(
+        self, organization_id: str, recipient_user_id: str, unread_only: bool = False
+    ) -> list[RecruiterAlert]:
+        query: dict[str, Any] = {"organization_id": organization_id, "recipient_user_id": recipient_user_id}
+        if unread_only:
+            query["status"] = "unread"
+        docs = await self.db.recruiter_alerts.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
+        return [RecruiterAlert(**doc) for doc in docs]
+
+    async def mark_recruiter_alert_read(
+        self, organization_id: str, recipient_user_id: str, recruiter_alert_id: str
+    ) -> Optional[RecruiterAlert]:
+        await self.db.recruiter_alerts.update_one(
+            {"organization_id": organization_id, "recipient_user_id": recipient_user_id, "recruiter_alert_id": recruiter_alert_id},
+            {"$set": {"status": "read", "read_at": utcnow_iso()}},
+        )
+        doc = await self.db.recruiter_alerts.find_one(
+            {"organization_id": organization_id, "recipient_user_id": recipient_user_id, "recruiter_alert_id": recruiter_alert_id}, {"_id": 0}
+        )
+        return RecruiterAlert(**doc) if doc else None
 
     # candidates
     async def upsert_candidate(self, c: Candidate) -> Candidate:

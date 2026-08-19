@@ -922,3 +922,93 @@ def test_collaboration_mention_validates_a_tenant_user_and_records_candidate_act
     assert ("mention", "org_alpha", "cand_alpha", "recruiter_alpha") in calls
     assert ("activity", "org_alpha", "cand_alpha", "collaboration.mention_created") in calls
     assert ("event", "org_alpha", "world.collaboration_mention.created", "cand_alpha") in calls
+
+
+def test_candidate_notification_delivery_requires_consent_and_records_inactive_provider_state(monkeypatch):
+    class _WorldWithoutConsent:
+        async def list_candidate_consents(self, *_args):
+            return []
+
+    async def _candidate(*_args):
+        return SimpleNamespace(candidate_id="cand_alpha")
+
+    monkeypatch.setattr(server, "world", _WorldWithoutConsent())
+    monkeypatch.setattr(server, "_scoped_candidate", _candidate)
+    user = SimpleNamespace(user_id="recruiter_alpha", organization_id="org_alpha", role=Role.RECRUITER)
+    request = server.CandidateNotificationDeliveryCreateRequest(notification_type="application_received", channel="email")
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(server.record_ats_candidate_notification_delivery("cand_alpha", request, user))
+
+    assert exc.value.status_code == 409
+    assert "consent" in exc.value.detail.lower()
+
+
+def test_candidate_notification_delivery_records_audit_and_never_claims_provider_delivery(monkeypatch):
+    calls = []
+
+    class _World:
+        async def list_candidate_consents(self, *_args):
+            return [server.CandidateConsent(organization_id="org_alpha", candidate_id="cand_alpha", purpose="recruiting")]
+
+        async def record_candidate_notification_delivery(self, delivery):
+            calls.append(("delivery", delivery.organization_id, delivery.candidate_id, delivery.delivery_state, delivery.consent_id))
+            return delivery
+
+        async def record_activity(self, activity):
+            calls.append(("activity", activity.organization_id, activity.entity_id, activity.event_type, activity.payload["delivery_state"]))
+            return activity
+
+    class _Governance:
+        async def emit(self, event):
+            calls.append(("event", event.organization_id, event.event_type.value, event.payload["delivery_state"]))
+
+    async def _candidate(*_args):
+        return SimpleNamespace(candidate_id="cand_alpha")
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    monkeypatch.setattr(server, "_scoped_candidate", _candidate)
+    user = SimpleNamespace(user_id="recruiter_alpha", organization_id="org_alpha", role=Role.RECRUITER)
+    request = server.CandidateNotificationDeliveryCreateRequest(notification_type="interview_scheduled", channel="email")
+
+    result = asyncio.run(server.record_ats_candidate_notification_delivery("cand_alpha", request, user))
+
+    assert result["delivery_state"] == "not_delivered"
+    assert ("delivery", "org_alpha", "cand_alpha", "not_delivered", result["consent_id"]) in calls
+    assert ("activity", "org_alpha", "cand_alpha", "candidate.notification_recorded", "not_delivered") in calls
+    assert ("event", "org_alpha", "world.candidate_notification.recorded", "not_delivered") in calls
+
+
+def test_recruiter_alert_validates_recipient_within_active_tenant(monkeypatch):
+    calls = []
+
+    class _Users:
+        async def find_one(self, query, _projection):
+            calls.append(("user_lookup", query["user_id"], query["organization_id"]))
+            return {"user_id": query["user_id"], "organization_id": query["organization_id"]}
+
+    class _World:
+        async def create_recruiter_alert(self, alert):
+            calls.append(("alert", alert.organization_id, alert.recipient_user_id, alert.alert_type))
+            return alert
+
+    class _Governance:
+        async def emit(self, event):
+            calls.append(("event", event.organization_id, event.event_type.value, event.payload["recipient_user_id"]))
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    monkeypatch.setattr(server, "db", SimpleNamespace(users=_Users()))
+    user = SimpleNamespace(user_id="manager_alpha", organization_id="org_alpha", role=Role.HIRING_MANAGER)
+    request = server.RecruiterAlertCreateRequest(
+        recipient_user_id="recruiter_alpha", alert_type="interview_reminder", title="Interview review needed"
+    )
+
+    result = asyncio.run(server.create_ats_recruiter_alert(request, user))
+
+    assert result["organization_id"] == "org_alpha"
+    assert result["status"] == "unread"
+    assert ("user_lookup", "recruiter_alpha", "org_alpha") in calls
+    assert ("alert", "org_alpha", "recruiter_alpha", "interview_reminder") in calls
+    assert ("event", "org_alpha", "world.recruiter_alert.created", "recruiter_alpha") in calls

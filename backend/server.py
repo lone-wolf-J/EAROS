@@ -91,6 +91,7 @@ from platform_core.world import (
     Application,
     AuditExportManifest,
     Candidate,
+    CandidateNotificationDelivery,
     CandidateTag,
     CandidateCommunication,
     CandidateConsent,
@@ -99,6 +100,7 @@ from platform_core.world import (
     Interview,
     InterviewFeedback,
     NotificationPreference,
+    RecruiterAlert,
     OnboardingHandoff,
     Pipeline,
     PipelineStageDefinition,
@@ -1955,6 +1957,22 @@ class NotificationPreferenceUpdateRequest(BaseModel):
     candidate_activity_alerts: bool = True
 
 
+class CandidateNotificationDeliveryCreateRequest(BaseModel):
+    notification_type: str = Field(min_length=3, max_length=120)
+    channel: str = Field(default="email", min_length=3, max_length=40)
+    subject: Optional[str] = Field(default=None, max_length=500)
+    body: Optional[str] = Field(default=None, max_length=10000)
+
+
+class RecruiterAlertCreateRequest(BaseModel):
+    recipient_user_id: str = Field(min_length=3, max_length=200)
+    alert_type: str = Field(min_length=3, max_length=120)
+    title: str = Field(min_length=3, max_length=300)
+    body: Optional[str] = Field(default=None, max_length=4000)
+    entity_type: Optional[str] = Field(default=None, max_length=100)
+    entity_id: Optional[str] = Field(default=None, max_length=200)
+
+
 @app.get("/api/ats/notifications/preferences")
 async def get_ats_notification_preferences(user: AppUser = Depends(_current_user)):
     preference = await world.get_notification_preference(user.organization_id, user.user_id)
@@ -1989,6 +2007,115 @@ async def update_ats_notification_preferences(
         payload={"in_app_enabled": preference.in_app_enabled, "email_enabled": preference.email_enabled},
     ))
     return preference.model_dump()
+
+
+@app.get("/api/ats/candidates/{candidate_id}/notification-deliveries")
+async def list_ats_candidate_notification_deliveries(candidate_id: str, user: AppUser = Depends(_current_user)):
+    _require_role(user, Role.ADMIN, Role.RECRUITER, Role.HIRING_MANAGER)
+    await _scoped_candidate(candidate_id, user)
+    return [delivery.model_dump() for delivery in await world.list_candidate_notification_deliveries(
+        user.organization_id, candidate_id
+    )]
+
+
+@app.post("/api/ats/candidates/{candidate_id}/notification-deliveries")
+async def record_ats_candidate_notification_delivery(
+    candidate_id: str, req: CandidateNotificationDeliveryCreateRequest, user: AppUser = Depends(_current_user)
+):
+    """Record a candidate notification intent; no provider message is sent by this endpoint."""
+    _require_role(user, Role.ADMIN, Role.RECRUITER)
+    await _scoped_candidate(candidate_id, user)
+    normalized_channel = req.channel.strip().lower()
+    consent = None
+    if normalized_channel in {"email", "sms"}:
+        consent = _has_active_recruiting_consent(
+            await world.list_candidate_consents(user.organization_id, candidate_id)
+        )
+        if not consent:
+            raise HTTPException(status_code=409, detail="Active recruiting consent is required before recording candidate email or SMS notification")
+    delivery = await world.record_candidate_notification_delivery(CandidateNotificationDelivery(
+        organization_id=user.organization_id,
+        candidate_id=candidate_id,
+        notification_type=req.notification_type,
+        channel=normalized_channel,
+        subject=req.subject,
+        body=req.body,
+        consent_id=consent.consent_id if consent else None,
+        created_by_user_id=user.user_id,
+    ))
+    await governance.emit(DomainEvent(
+        event_type=EventType.CANDIDATE_NOTIFICATION_RECORDED,
+        actor=f"user:{user.user_id}",
+        subject_type="candidate",
+        subject_id=candidate_id,
+        organization_id=user.organization_id,
+        payload={"delivery_id": delivery.candidate_notification_delivery_id, "notification_type": delivery.notification_type, "channel": delivery.channel, "delivery_state": delivery.delivery_state},
+    ))
+    await world.record_activity(ActivityRecord(
+        organization_id=user.organization_id,
+        entity_type="candidate",
+        entity_id=candidate_id,
+        event_type="candidate.notification_recorded",
+        actor_user_id=user.user_id,
+        payload={"delivery_id": delivery.candidate_notification_delivery_id, "notification_type": delivery.notification_type, "channel": delivery.channel, "consent_id": delivery.consent_id, "delivery_state": delivery.delivery_state},
+    ))
+    return delivery.model_dump()
+
+
+@app.get("/api/ats/notifications/alerts")
+async def list_ats_recruiter_alerts(unread_only: bool = False, user: AppUser = Depends(_current_user)):
+    _require_role(user, Role.ADMIN, Role.RECRUITER, Role.HIRING_MANAGER)
+    return [alert.model_dump() for alert in await world.list_recruiter_alerts(
+        user.organization_id, user.user_id, unread_only=unread_only
+    )]
+
+
+@app.post("/api/ats/notifications/alerts")
+async def create_ats_recruiter_alert(
+    req: RecruiterAlertCreateRequest, user: AppUser = Depends(_current_user)
+):
+    _require_role(user, Role.ADMIN, Role.RECRUITER, Role.HIRING_MANAGER)
+    recipient = await db.users.find_one(
+        {"user_id": req.recipient_user_id, "organization_id": user.organization_id}, {"_id": 0}
+    )
+    if not recipient:
+        raise HTTPException(status_code=404, detail="Alert recipient not found in this organization")
+    alert = await world.create_recruiter_alert(RecruiterAlert(
+        organization_id=user.organization_id,
+        recipient_user_id=req.recipient_user_id,
+        alert_type=req.alert_type,
+        title=req.title,
+        body=req.body,
+        entity_type=req.entity_type,
+        entity_id=req.entity_id,
+        created_by_user_id=user.user_id,
+    ))
+    await governance.emit(DomainEvent(
+        event_type=EventType.RECRUITER_ALERT_CREATED,
+        actor=f"user:{user.user_id}",
+        subject_type="recruiter_alert",
+        subject_id=alert.recruiter_alert_id,
+        organization_id=user.organization_id,
+        payload={"recipient_user_id": alert.recipient_user_id, "alert_type": alert.alert_type, "entity_type": alert.entity_type, "entity_id": alert.entity_id},
+    ))
+    return alert.model_dump()
+
+
+@app.post("/api/ats/notifications/alerts/{recruiter_alert_id}/read")
+async def mark_ats_recruiter_alert_read(recruiter_alert_id: str, user: AppUser = Depends(_current_user)):
+    _require_role(user, Role.ADMIN, Role.RECRUITER, Role.HIRING_MANAGER)
+    alert = await world.mark_recruiter_alert_read(user.organization_id, user.user_id, recruiter_alert_id)
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    await governance.emit(DomainEvent(
+        event_type=EventType.RECRUITER_ALERT_READ,
+        actor=f"user:{user.user_id}",
+        subject_type="recruiter_alert",
+        subject_id=alert.recruiter_alert_id,
+        organization_id=user.organization_id,
+        payload={"alert_type": alert.alert_type},
+    ))
+    return alert.model_dump()
 
 
 # ============================================================

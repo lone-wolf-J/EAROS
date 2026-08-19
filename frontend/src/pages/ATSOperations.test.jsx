@@ -21,10 +21,11 @@ describe("ATS Operations route contract", () => {
     expect(formatDate(null)).toBe("—");
   });
 
-  it("keeps team mentions and candidate communications under explicit recruiter guardrails", () => {
+  it("keeps team mentions, communications, and candidate notices under explicit recruiter guardrails", () => {
     expect(COLLABORATION_GUARDRAILS).toEqual([
       "mentions_validate_tenant_users",
       "communications_are_recorded_not_delivered",
+      "candidate_notifications_are_recorded_not_delivered",
       "outbound_email_and_sms_require_active_recruiting_consent",
     ]);
   });

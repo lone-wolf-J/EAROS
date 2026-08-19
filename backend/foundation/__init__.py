@@ -56,6 +56,8 @@ def new_retention_case_id() -> str: return _new_id("ret")
 def new_audit_export_id() -> str: return _new_id("auditexp")
 def new_onboarding_handoff_id() -> str: return _new_id("handoff")
 def new_notification_preference_id() -> str: return _new_id("notifpref")
+def new_candidate_notification_delivery_id() -> str: return _new_id("candnotif")
+def new_recruiter_alert_id() -> str: return _new_id("alert")
 
 
 def utcnow() -> datetime:
@@ -217,6 +219,9 @@ class EventType(str, Enum):
     HIRING_DECISION_DENIED = "world.hiring_decision.denied"
     CONSENT_RECORDED = "world.consent.recorded"
     NOTIFICATION_PREFERENCE_UPDATED = "world.notification_preference.updated"
+    CANDIDATE_NOTIFICATION_RECORDED = "world.candidate_notification.recorded"
+    RECRUITER_ALERT_CREATED = "world.recruiter_alert.created"
+    RECRUITER_ALERT_READ = "world.recruiter_alert.read"
     OFFER_EXTENDED = "world.offer.extended"
     JOB_CREATED = "world.job.created"
     RETENTION_CASE_REQUESTED = "world.retention_case.requested"
