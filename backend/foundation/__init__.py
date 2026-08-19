@@ -36,7 +36,9 @@ def new_interview_id() -> str: return _new_id("interview")
 def new_scorecard_id() -> str: return _new_id("scorecard")
 def new_feedback_id() -> str: return _new_id("feedback")
 def new_activity_id() -> str: return _new_id("activity")
+def new_mention_id() -> str: return _new_id("mention")
 def new_communication_id() -> str: return _new_id("comm")
+def new_hiring_decision_id() -> str: return _new_id("hiredec")
 def new_offer_id() -> str: return _new_id("offer")
 def new_skill_id() -> str: return _new_id("skill")
 def new_policy_id() -> str: return _new_id("pol")
@@ -208,6 +210,11 @@ class EventType(str, Enum):
     REQUISITION_PUBLICATION_UPDATED = "world.requisition.publication_updated"
     INTERVIEW_SCHEDULED = "world.interview.scheduled"
     SCORECARD_SUBMITTED = "world.scorecard.submitted"
+    COLLABORATION_MENTION_CREATED = "world.collaboration_mention.created"
+    CANDIDATE_COMMUNICATION_RECORDED = "world.candidate_communication.recorded"
+    HIRING_DECISION_REQUESTED = "world.hiring_decision.requested"
+    HIRING_DECISION_EFFECTIVE = "world.hiring_decision.effective"
+    HIRING_DECISION_DENIED = "world.hiring_decision.denied"
     CONSENT_RECORDED = "world.consent.recorded"
     NOTIFICATION_PREFERENCE_UPDATED = "world.notification_preference.updated"
     OFFER_EXTENDED = "world.offer.extended"

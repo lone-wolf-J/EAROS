@@ -77,7 +77,7 @@ from intelligence.scenarios import (
 from intelligence.scenario_tracker import tracker as scenario_tracker
 from platform_core.agents import AGENT_CATALOG, list_agents
 from platform_core.capabilities import build_default_registry
-from platform_core.governance import Governance
+from platform_core.governance import Approval, Governance
 from platform_core.integrations import list_integrations, list_job_distribution_adapters as integration_job_distribution_adapters
 from platform_core.live_activity import mission_snapshot
 from platform_core.memory import Memory
@@ -92,7 +92,10 @@ from platform_core.world import (
     AuditExportManifest,
     Candidate,
     CandidateTag,
+    CandidateCommunication,
     CandidateConsent,
+    CollaborationMention,
+    HiringDecision,
     Interview,
     InterviewFeedback,
     NotificationPreference,
@@ -1010,6 +1013,38 @@ class InterviewFeedbackCreateRequest(BaseModel):
     summary: Optional[str] = Field(default=None, max_length=10000)
 
 
+class CollaborationMentionCreateRequest(BaseModel):
+    mentioned_user_id: str = Field(min_length=3, max_length=200)
+    feedback_id: Optional[str] = Field(default=None, max_length=200)
+    context: Optional[str] = Field(default=None, max_length=2000)
+
+
+class CandidateCommunicationCreateRequest(BaseModel):
+    direction: str = Field(pattern="^(inbound|outbound)$")
+    channel: str = Field(pattern="^(email|phone|sms|in_app|other)$")
+    subject: Optional[str] = Field(default=None, max_length=500)
+    body: Optional[str] = Field(default=None, max_length=10000)
+
+
+class HiringDecisionCreateRequest(BaseModel):
+    application_id: str = Field(min_length=3, max_length=200)
+    outcome: str = Field(pattern="^(hire|reject)$")
+    rationale: str = Field(min_length=10, max_length=10_000)
+
+
+def _has_active_recruiting_consent(consents: list[CandidateConsent]) -> Optional[CandidateConsent]:
+    now = utcnow_iso()
+    for consent in consents:
+        status = getattr(consent.status, "value", consent.status)
+        if (
+            status == "granted"
+            and consent.purpose in {"recruiting", "data_processing"}
+            and (not consent.expires_at or consent.expires_at > now)
+        ):
+            return consent
+    return None
+
+
 @app.get("/api/ats/interviews/{interview_id}/feedback")
 async def list_ats_interview_feedback(interview_id: str, user: AppUser = Depends(_current_user)):
     if not await world.get_interview(user.organization_id, interview_id):
@@ -1056,6 +1091,179 @@ async def create_ats_interview_feedback(
         },
     ))
     return feedback.model_dump()
+
+
+@app.get("/api/ats/candidates/{candidate_id}/collaboration/mentions")
+async def list_ats_candidate_mentions(candidate_id: str, user: AppUser = Depends(_current_user)):
+    _require_role(user, Role.ADMIN, Role.RECRUITER, Role.HIRING_MANAGER)
+    await _scoped_candidate(candidate_id, user)
+    return [mention.model_dump() for mention in await world.list_collaboration_mentions(user.organization_id, candidate_id)]
+
+
+@app.post("/api/ats/candidates/{candidate_id}/collaboration/mentions")
+async def create_ats_candidate_mention(
+    candidate_id: str, req: CollaborationMentionCreateRequest, user: AppUser = Depends(_current_user)
+):
+    _require_role(user, Role.ADMIN, Role.RECRUITER, Role.HIRING_MANAGER)
+    await _scoped_candidate(candidate_id, user)
+    mentioned_user = await db.users.find_one(
+        {"user_id": req.mentioned_user_id, "organization_id": user.organization_id}, {"_id": 0}
+    )
+    if not mentioned_user:
+        raise HTTPException(status_code=404, detail="Mentioned user not found in this organization")
+    if req.feedback_id:
+        feedback = await world.get_interview_feedback(user.organization_id, req.feedback_id)
+        if not feedback:
+            raise HTTPException(status_code=404, detail="Feedback not found")
+        interview = await world.get_interview(user.organization_id, feedback.interview_id)
+        if not interview or interview.candidate_id != candidate_id:
+            raise HTTPException(status_code=400, detail="Feedback does not belong to this candidate")
+    mention = await world.record_collaboration_mention(CollaborationMention(
+        organization_id=user.organization_id,
+        candidate_id=candidate_id,
+        mentioned_user_id=req.mentioned_user_id,
+        mentioned_by_user_id=user.user_id,
+        feedback_id=req.feedback_id,
+        context=req.context,
+    ))
+    await governance.emit(DomainEvent(
+        event_type=EventType.COLLABORATION_MENTION_CREATED,
+        actor=f"user:{user.user_id}",
+        subject_type="candidate",
+        subject_id=candidate_id,
+        organization_id=user.organization_id,
+        payload={"mention_id": mention.mention_id, "mentioned_user_id": mention.mentioned_user_id, "feedback_id": mention.feedback_id},
+    ))
+    await world.record_activity(ActivityRecord(
+        organization_id=user.organization_id,
+        entity_type="candidate",
+        entity_id=candidate_id,
+        event_type="collaboration.mention_created",
+        actor_user_id=user.user_id,
+        payload={"mention_id": mention.mention_id, "mentioned_user_id": mention.mentioned_user_id, "feedback_id": mention.feedback_id},
+    ))
+    return mention.model_dump()
+
+
+@app.get("/api/ats/candidates/{candidate_id}/communications")
+async def list_ats_candidate_communications(candidate_id: str, user: AppUser = Depends(_current_user)):
+    _require_role(user, Role.ADMIN, Role.RECRUITER, Role.HIRING_MANAGER)
+    await _scoped_candidate(candidate_id, user)
+    return [communication.model_dump() for communication in await world.list_candidate_communications(user.organization_id, candidate_id)]
+
+
+@app.post("/api/ats/candidates/{candidate_id}/communications")
+async def record_ats_candidate_communication(
+    candidate_id: str, req: CandidateCommunicationCreateRequest, user: AppUser = Depends(_current_user)
+):
+    _require_role(user, Role.ADMIN, Role.RECRUITER)
+    await _scoped_candidate(candidate_id, user)
+    consent = None
+    if req.direction == "outbound" and req.channel in {"email", "sms"}:
+        consent = _has_active_recruiting_consent(
+            await world.list_candidate_consents(user.organization_id, candidate_id)
+        )
+        if not consent:
+            raise HTTPException(status_code=409, detail="Active recruiting consent is required before recording outbound email or SMS")
+    communication = await world.record_candidate_communication(CandidateCommunication(
+        organization_id=user.organization_id,
+        candidate_id=candidate_id,
+        direction=req.direction,
+        channel=req.channel,
+        subject=req.subject,
+        body=req.body,
+        consent_id=consent.consent_id if consent else None,
+        recorded_by_user_id=user.user_id,
+    ))
+    await governance.emit(DomainEvent(
+        event_type=EventType.CANDIDATE_COMMUNICATION_RECORDED,
+        actor=f"user:{user.user_id}",
+        subject_type="candidate",
+        subject_id=candidate_id,
+        organization_id=user.organization_id,
+        payload={"communication_id": communication.communication_id, "direction": communication.direction, "channel": communication.channel, "delivery_state": communication.delivery_state},
+    ))
+    await world.record_activity(ActivityRecord(
+        organization_id=user.organization_id,
+        entity_type="candidate",
+        entity_id=candidate_id,
+        event_type="candidate.communication_recorded",
+        actor_user_id=user.user_id,
+        payload={"communication_id": communication.communication_id, "direction": communication.direction, "channel": communication.channel, "consent_id": communication.consent_id},
+    ))
+    return communication.model_dump()
+
+
+@app.get("/api/ats/hiring-decisions")
+async def list_ats_hiring_decisions(
+    application_id: Optional[str] = None,
+    candidate_id: Optional[str] = None,
+    user: AppUser = Depends(_current_user),
+):
+    _require_role(user, Role.ADMIN, Role.RECRUITER, Role.HIRING_MANAGER)
+    return [decision.model_dump() for decision in await world.list_hiring_decisions(
+        user.organization_id, application_id=application_id, candidate_id=candidate_id
+    )]
+
+
+@app.post("/api/ats/hiring-decisions")
+async def request_ats_hiring_decision(
+    req: HiringDecisionCreateRequest, user: AppUser = Depends(_current_user)
+):
+    _require_role(user, Role.ADMIN, Role.RECRUITER, Role.HIRING_MANAGER)
+    application = await _scoped_application(req.application_id, user)
+    application_status = getattr(application.status, "value", application.status)
+    if application_status != "active":
+        raise HTTPException(status_code=409, detail="Only an active application can enter final hiring-decision review")
+    existing = await world.list_hiring_decisions(user.organization_id, application_id=application.application_id)
+    if any(item.status == "awaiting_approval" for item in existing):
+        raise HTTPException(status_code=409, detail="A hiring decision is already awaiting approval for this application")
+    decision = HiringDecision(
+        organization_id=user.organization_id,
+        application_id=application.application_id,
+        candidate_id=application.candidate_id,
+        requisition_id=application.requisition_id,
+        outcome=req.outcome,
+        rationale=req.rationale,
+        requested_by_user_id=user.user_id,
+    )
+    approval = Approval(
+        organization_id=user.organization_id,
+        subject_type="hiring_decision",
+        subject_id=decision.hiring_decision_id,
+        requested_by=user.user_id,
+        reason=f"Approve final {decision.outcome} decision for application {application.application_id}",
+        context={
+            "hiring_decision_id": decision.hiring_decision_id,
+            "application_id": application.application_id,
+            "candidate_id": application.candidate_id,
+            "outcome": decision.outcome,
+            "correlation_id": decision.hiring_decision_id,
+        },
+    )
+    decision.approval_id = approval.approval_id
+    await world.create_hiring_decision(decision)
+    await governance.request_approval(approval)
+    await governance.emit(DomainEvent(
+        event_type=EventType.HIRING_DECISION_REQUESTED,
+        actor=f"user:{user.user_id}",
+        subject_type="hiring_decision",
+        subject_id=decision.hiring_decision_id,
+        organization_id=user.organization_id,
+        payload={"application_id": application.application_id, "candidate_id": application.candidate_id, "outcome": decision.outcome, "approval_id": approval.approval_id},
+        correlation_id=decision.hiring_decision_id,
+    ))
+    await world.record_activity(ActivityRecord(
+        organization_id=user.organization_id,
+        entity_type="candidate",
+        entity_id=application.candidate_id,
+        event_type="hiring_decision.requested",
+        actor_user_id=user.user_id,
+        payload={"hiring_decision_id": decision.hiring_decision_id, "application_id": application.application_id, "outcome": decision.outcome, "approval_id": approval.approval_id},
+    ))
+    response = decision.model_dump()
+    response["approval"] = approval.model_dump()
+    return response
 
 
 @app.get("/api/ats/activity/{entity_type}/{entity_id}")
@@ -1334,6 +1542,17 @@ async def decide_approval(
     approval = next((item for item in approvals if item.approval_id == approval_id), None)
     if not approval:
         raise HTTPException(404, "approval not found")
+    if getattr(approval, "status", None) != "pending":
+        raise HTTPException(status_code=409, detail="This approval has already been decided")
+    if getattr(approval, "subject_type", None) == "hiring_decision" and getattr(approval, "requested_by", None) == user.user_id:
+        raise HTTPException(status_code=403, detail="A requester cannot approve or deny their own hiring decision")
+    if getattr(approval, "subject_type", None) == "hiring_decision" and req.decision == "granted":
+        decision = await world.get_hiring_decision(user.organization_id, approval.subject_id)
+        if not decision or decision.approval_id != approval.approval_id:
+            raise HTTPException(404, "hiring decision not found")
+        application = await world.get_application(user.organization_id, decision.application_id)
+        if not application or getattr(application.status, "value", application.status) != "active":
+            raise HTTPException(status_code=409, detail="The target application is no longer active; hiring decision approval cannot proceed")
     if approval.context.get("capability_id") in RETENTION_EXECUTION_CAPABILITIES:
         _require_role(user, Role.ADMIN)
     a = await governance.decide_approval(approval_id, req.decision, user.user_id, req.note)
@@ -1348,6 +1567,45 @@ async def decide_approval(
         resumed = await runtime.resume_after_approval(a.context["execution_id"], user.organization_id)
         await _record_completed_retention_events(resumed, user.user_id)
         response["resumed_execution"] = resumed.model_dump()
+    if getattr(a, "subject_type", None) == "hiring_decision":
+        decision = await world.get_hiring_decision(user.organization_id, a.subject_id)
+        if not decision or decision.approval_id != a.approval_id:
+            raise HTTPException(404, "hiring decision not found")
+        application = None
+        if a.status == "granted":
+            application = await world.apply_hiring_decision_application_status(user.organization_id, decision)
+            if not application:
+                response["hiring_decision"] = decision.model_dump()
+                response["hiring_decision_error"] = "The application changed during approval. The decision remains awaiting approval and no final outcome was applied."
+                return response
+        resolution_status = "effective" if a.status == "granted" else "denied"
+        resolved = await world.resolve_hiring_decision(
+            user.organization_id,
+            decision.hiring_decision_id,
+            approval_id=a.approval_id,
+            status=resolution_status,
+            resolved_by_user_id=user.user_id,
+        )
+        if not resolved:
+            raise HTTPException(404, "hiring decision not found")
+        await governance.emit(DomainEvent(
+            event_type=EventType.HIRING_DECISION_EFFECTIVE if a.status == "granted" else EventType.HIRING_DECISION_DENIED,
+            actor=f"user:{user.user_id}",
+            subject_type="hiring_decision",
+            subject_id=resolved.hiring_decision_id,
+            organization_id=user.organization_id,
+            payload={"approval_id": a.approval_id, "application_id": resolved.application_id, "outcome": resolved.outcome, "application_status": getattr(application.status, "value", application.status) if application else None},
+            correlation_id=resolved.hiring_decision_id,
+        ))
+        await world.record_activity(ActivityRecord(
+            organization_id=user.organization_id,
+            entity_type="candidate",
+            entity_id=resolved.candidate_id,
+            event_type="hiring_decision.effective" if a.status == "granted" else "hiring_decision.denied",
+            actor_user_id=user.user_id,
+            payload={"hiring_decision_id": resolved.hiring_decision_id, "approval_id": a.approval_id, "outcome": resolved.outcome, "application_id": resolved.application_id},
+        ))
+        response["hiring_decision"] = resolved.model_dump()
     return response
 
 

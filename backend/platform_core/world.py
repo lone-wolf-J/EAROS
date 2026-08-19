@@ -29,11 +29,14 @@ from foundation import (
     new_application_id,
     new_candidate_id,
     new_candidate_tag_id,
+    new_communication_id,
     new_consent_id,
     new_department_id,
     new_feedback_id,
+    new_hiring_decision_id,
     new_interview_id,
     new_job_id,
+    new_mention_id,
     new_notification_preference_id,
     new_offer_id,
     new_onboarding_handoff_id,
@@ -268,6 +271,25 @@ class Application(BaseModel):
     retention_case_id: Optional[str] = None
 
 
+class HiringDecision(BaseModel):
+    """A recruiter-requested final outcome that is ineffective until independently approved."""
+    model_config = ConfigDict(extra="ignore")
+    hiring_decision_id: str = Field(default_factory=new_hiring_decision_id)
+    organization_id: str
+    application_id: str
+    candidate_id: str
+    requisition_id: Optional[str] = None
+    outcome: str = Field(pattern="^(hire|reject)$")
+    rationale: str = Field(min_length=10, max_length=10_000)
+    requested_by_user_id: str
+    approval_id: Optional[str] = None
+    status: str = "awaiting_approval"  # awaiting_approval | effective | denied
+    resolved_by_user_id: Optional[str] = None
+    resolved_at: Optional[str] = None
+    created_at: str = Field(default_factory=utcnow_iso)
+    updated_at: str = Field(default_factory=utcnow_iso)
+
+
 class TalentPool(BaseModel):
     model_config = ConfigDict(extra="ignore")
     talent_pool_id: str = Field(default_factory=new_talent_pool_id)
@@ -367,6 +389,37 @@ class InterviewFeedback(BaseModel):
     concerns: list[str] = Field(default_factory=list)
     summary: Optional[str] = None
     submitted_at: str = Field(default_factory=utcnow_iso)
+
+
+class CollaborationMention(BaseModel):
+    """A tenant-scoped recruiter or hiring-manager reference attached to a candidate record."""
+
+    model_config = ConfigDict(extra="ignore")
+    mention_id: str = Field(default_factory=new_mention_id)
+    organization_id: str
+    candidate_id: str
+    mentioned_user_id: str
+    mentioned_by_user_id: str
+    feedback_id: Optional[str] = None
+    context: Optional[str] = Field(default=None, max_length=2000)
+    created_at: str = Field(default_factory=utcnow_iso)
+
+
+class CandidateCommunication(BaseModel):
+    """An immutable record of a human-operated candidate communication, never a delivery job."""
+
+    model_config = ConfigDict(extra="ignore")
+    communication_id: str = Field(default_factory=new_communication_id)
+    organization_id: str
+    candidate_id: str
+    direction: str  # inbound | outbound
+    channel: str  # email | phone | sms | in_app | other
+    subject: Optional[str] = None
+    body: Optional[str] = None
+    delivery_state: str = "recorded"  # recorded only; delivery integrations are separate
+    consent_id: Optional[str] = None
+    recorded_by_user_id: Optional[str] = None
+    created_at: str = Field(default_factory=utcnow_iso)
 
 
 class ActivityRecord(BaseModel):
@@ -818,6 +871,64 @@ class WorldState:
         docs = await self.db.applications.find(query, {"_id": 0}).sort("created_at", -1).to_list(5000)
         return [Application(**doc) for doc in docs]
 
+    # final hiring outcomes — a decision becomes effective only from the approval route
+    async def create_hiring_decision(self, decision: HiringDecision) -> HiringDecision:
+        await self.db.hiring_decisions.insert_one(decision.model_dump())
+        return decision
+
+    async def get_hiring_decision(self, organization_id: str, hiring_decision_id: str) -> Optional[HiringDecision]:
+        doc = await self.db.hiring_decisions.find_one(
+            {"organization_id": organization_id, "hiring_decision_id": hiring_decision_id}, {"_id": 0}
+        )
+        return HiringDecision(**doc) if doc else None
+
+    async def list_hiring_decisions(
+        self, organization_id: str, *, application_id: Optional[str] = None, candidate_id: Optional[str] = None
+    ) -> list[HiringDecision]:
+        query: dict[str, Any] = {"organization_id": organization_id}
+        if application_id:
+            query["application_id"] = application_id
+        if candidate_id:
+            query["candidate_id"] = candidate_id
+        docs = await self.db.hiring_decisions.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+        return [HiringDecision(**doc) for doc in docs]
+
+    async def resolve_hiring_decision(
+        self,
+        organization_id: str,
+        hiring_decision_id: str,
+        *,
+        approval_id: str,
+        status: str,
+        resolved_by_user_id: str,
+    ) -> Optional[HiringDecision]:
+        now = utcnow_iso()
+        result = await self.db.hiring_decisions.update_one(
+            {
+                "organization_id": organization_id,
+                "hiring_decision_id": hiring_decision_id,
+                "approval_id": approval_id,
+                "status": "awaiting_approval",
+            },
+            {"$set": {"status": status, "resolved_by_user_id": resolved_by_user_id, "resolved_at": now, "updated_at": now}},
+        )
+        if result.matched_count != 1:
+            return await self.get_hiring_decision(organization_id, hiring_decision_id)
+        return await self.get_hiring_decision(organization_id, hiring_decision_id)
+
+    async def apply_hiring_decision_application_status(
+        self, organization_id: str, decision: HiringDecision
+    ) -> Optional[Application]:
+        status = ApplicationStatus.HIRED if decision.outcome == "hire" else ApplicationStatus.REJECTED
+        now = utcnow_iso()
+        result = await self.db.applications.update_one(
+            {"organization_id": organization_id, "application_id": decision.application_id, "status": ApplicationStatus.ACTIVE.value},
+            {"$set": {"status": status.value, "updated_at": now}, "$push": {"stage_history": {"stage_name": "Hired" if decision.outcome == "hire" else "Rejected", "changed_at": now, "reason": "approved_hiring_decision", "hiring_decision_id": decision.hiring_decision_id}}},
+        )
+        if result.matched_count != 1:
+            return None
+        return await self.get_application(organization_id, decision.application_id)
+
     # candidate relationship management
     async def upsert_talent_pool(self, pool: TalentPool) -> TalentPool:
         await self.db.talent_pools.update_one(
@@ -954,11 +1065,41 @@ class WorldState:
         )
         return feedback
 
+    async def get_interview_feedback(self, organization_id: str, feedback_id: str) -> Optional[InterviewFeedback]:
+        doc = await self.db.interview_feedback.find_one(
+            {"organization_id": organization_id, "feedback_id": feedback_id}, {"_id": 0}
+        )
+        return InterviewFeedback(**doc) if doc else None
+
     async def list_interview_feedback(self, organization_id: str, interview_id: str) -> list[InterviewFeedback]:
         docs = await self.db.interview_feedback.find(
             {"organization_id": organization_id, "interview_id": interview_id}, {"_id": 0}
         ).sort("submitted_at", -1).to_list(1000)
         return [InterviewFeedback(**doc) for doc in docs]
+
+    async def record_collaboration_mention(self, mention: CollaborationMention) -> CollaborationMention:
+        await self.db.collaboration_mentions.insert_one(mention.model_dump())
+        return mention
+
+    async def list_collaboration_mentions(
+        self, organization_id: str, candidate_id: str, limit: int = 100
+    ) -> list[CollaborationMention]:
+        docs = await self.db.collaboration_mentions.find(
+            {"organization_id": organization_id, "candidate_id": candidate_id}, {"_id": 0}
+        ).sort("created_at", -1).to_list(min(max(limit, 1), 500))
+        return [CollaborationMention(**doc) for doc in docs]
+
+    async def record_candidate_communication(self, communication: CandidateCommunication) -> CandidateCommunication:
+        await self.db.candidate_communications.insert_one(communication.model_dump())
+        return communication
+
+    async def list_candidate_communications(
+        self, organization_id: str, candidate_id: str, limit: int = 100
+    ) -> list[CandidateCommunication]:
+        docs = await self.db.candidate_communications.find(
+            {"organization_id": organization_id, "candidate_id": candidate_id}, {"_id": 0}
+        ).sort("created_at", -1).to_list(min(max(limit, 1), 500))
+        return [CandidateCommunication(**doc) for doc in docs]
 
     # append-only operational history, separate from the governance event stream
     async def record_activity(self, activity: ActivityRecord) -> ActivityRecord:

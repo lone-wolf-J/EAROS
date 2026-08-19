@@ -11,7 +11,7 @@ os.environ.setdefault("MONGO_URL", "mongodb://127.0.0.1:27017")
 os.environ.setdefault("DB_NAME", "earos_contract_tests")
 
 import server
-from foundation import AuditExportStatus, ExecutionStatus, RetentionCaseStatus, Role
+from foundation import ApplicationStatus, AuditExportStatus, ExecutionStatus, RetentionCaseStatus, Role
 from platform_core.capabilities import build_default_registry
 from platform_core.governance import Governance
 from platform_core.policy import PolicyEngine
@@ -232,6 +232,190 @@ def test_retention_approval_decision_rejects_non_administrator(monkeypatch):
             "apr_retention", server.DecideApprovalRequest(decision="granted"), user
         ))
     assert exc.value.status_code == 403
+
+
+def test_hiring_decision_request_creates_tenant_scoped_approval_and_preserves_active_application(monkeypatch):
+    calls = []
+    application = SimpleNamespace(
+        application_id="app_alpha",
+        candidate_id="cand_alpha",
+        requisition_id="req_alpha",
+        status=ApplicationStatus.ACTIVE,
+    )
+
+    class _World:
+        async def get_application(self, organization_id, application_id):
+            calls.append(("application", organization_id, application_id))
+            return application if (organization_id, application_id) == ("org_alpha", "app_alpha") else None
+
+        async def list_hiring_decisions(self, organization_id, application_id=None, candidate_id=None):
+            calls.append(("decisions", organization_id, application_id, candidate_id))
+            return []
+
+        async def create_hiring_decision(self, decision):
+            calls.append(("create", decision.organization_id, decision.application_id, decision.status))
+            return decision
+
+        async def record_activity(self, activity):
+            calls.append(("activity", activity.organization_id, activity.entity_id, activity.event_type))
+            return activity
+
+    class _Governance:
+        async def request_approval(self, approval):
+            calls.append(("approval", approval.organization_id, approval.subject_type, approval.subject_id))
+            return approval
+
+        async def emit(self, event):
+            calls.append(("event", event.organization_id, event.event_type.value))
+            return event
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    user = SimpleNamespace(user_id="usr_recruiter", organization_id="org_alpha", role=Role.RECRUITER)
+
+    result = asyncio.run(server.request_ats_hiring_decision(
+        server.HiringDecisionCreateRequest(
+            application_id="app_alpha", outcome="hire", rationale="Panel evidence supports a final hiring decision after structured review."
+        ),
+        user,
+    ))
+
+    assert result["status"] == "awaiting_approval"
+    assert result["approval"]["organization_id"] == "org_alpha"
+    assert result["approval"]["subject_type"] == "hiring_decision"
+    assert ("create", "org_alpha", "app_alpha", "awaiting_approval") in calls
+    assert ("activity", "org_alpha", "cand_alpha", "hiring_decision.requested") in calls
+    assert application.status is ApplicationStatus.ACTIVE
+
+
+def test_hiring_decision_grant_requires_independent_approver_and_only_then_updates_application(monkeypatch):
+    calls = []
+    decision = SimpleNamespace(
+        hiring_decision_id="hiredec_alpha",
+        approval_id="apr_hiredec",
+        application_id="app_alpha",
+        candidate_id="cand_alpha",
+        outcome="hire",
+        status="awaiting_approval",
+        model_dump=lambda: {"hiring_decision_id": "hiredec_alpha", "status": decision.status},
+    )
+    approval = SimpleNamespace(
+        approval_id="apr_hiredec",
+        subject_type="hiring_decision",
+        subject_id="hiredec_alpha",
+        requested_by="usr_recruiter",
+        context={"hiring_decision_id": "hiredec_alpha"},
+        status="pending",
+        model_dump=lambda: {"approval_id": "apr_hiredec", "status": approval.status},
+    )
+
+    class _World:
+        async def get_application(self, organization_id, application_id):
+            calls.append(("application", organization_id, application_id))
+            return SimpleNamespace(status=ApplicationStatus.ACTIVE) if (organization_id, application_id) == ("org_alpha", "app_alpha") else None
+
+        async def get_hiring_decision(self, organization_id, hiring_decision_id):
+            calls.append(("get", organization_id, hiring_decision_id))
+            return decision if (organization_id, hiring_decision_id) == ("org_alpha", "hiredec_alpha") else None
+
+        async def resolve_hiring_decision(self, organization_id, hiring_decision_id, **kwargs):
+            calls.append(("resolve", organization_id, hiring_decision_id, kwargs["status"], kwargs["resolved_by_user_id"]))
+            decision.status = kwargs["status"]
+            return decision
+
+        async def apply_hiring_decision_application_status(self, organization_id, resolved):
+            calls.append(("apply", organization_id, resolved.application_id, resolved.outcome))
+            return SimpleNamespace(status=ApplicationStatus.HIRED)
+
+        async def record_activity(self, activity):
+            calls.append(("activity", activity.organization_id, activity.entity_id, activity.event_type))
+            return activity
+
+    class _Governance:
+        async def list_approvals(self, organization_id):
+            calls.append(("list", organization_id))
+            return [approval]
+
+        async def decide_approval(self, approval_id, outcome, decided_by, note):
+            calls.append(("decide", approval_id, outcome, decided_by))
+            approval.status = outcome
+            return approval
+
+        async def emit(self, event):
+            calls.append(("event", event.organization_id, event.event_type.value))
+            return event
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    independent_admin = SimpleNamespace(user_id="usr_admin", organization_id="org_alpha", role=Role.ADMIN)
+    requester = SimpleNamespace(user_id="usr_recruiter", organization_id="org_alpha", role=Role.RECRUITER)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(server.decide_approval(
+            "apr_hiredec", server.DecideApprovalRequest(decision="denied"), requester
+        ))
+    assert exc.value.status_code == 403
+
+    result = asyncio.run(server.decide_approval(
+        "apr_hiredec", server.DecideApprovalRequest(decision="granted", note="Independent panel approval."), independent_admin
+    ))
+
+    assert result["hiring_decision"] == {"hiring_decision_id": "hiredec_alpha", "status": "effective"}
+    assert ("apply", "org_alpha", "app_alpha", "hire") in calls
+    assert ("activity", "org_alpha", "cand_alpha", "hiring_decision.effective") in calls
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(server.decide_approval(
+            "apr_hiredec", server.DecideApprovalRequest(decision="denied"), independent_admin
+        ))
+    assert exc.value.status_code == 409
+    assert len([call for call in calls if call[0] == "activity"]) == 1
+
+
+def test_hiring_decision_grant_rejects_a_stale_application_without_deciding_or_emitting_effects(monkeypatch):
+    calls = []
+    decision = SimpleNamespace(
+        hiring_decision_id="hiredec_stale",
+        approval_id="apr_hiredec_stale",
+        application_id="app_stale",
+    )
+    approval = SimpleNamespace(
+        approval_id="apr_hiredec_stale",
+        subject_type="hiring_decision",
+        subject_id="hiredec_stale",
+        requested_by="usr_recruiter",
+        context={"hiring_decision_id": "hiredec_stale"},
+        status="pending",
+    )
+
+    class _World:
+        async def get_hiring_decision(self, organization_id, hiring_decision_id):
+            calls.append(("decision", organization_id, hiring_decision_id))
+            return decision
+
+        async def get_application(self, organization_id, application_id):
+            calls.append(("application", organization_id, application_id))
+            return SimpleNamespace(status=ApplicationStatus.REJECTED)
+
+    class _Governance:
+        async def list_approvals(self, organization_id):
+            calls.append(("list", organization_id))
+            return [approval]
+
+        async def decide_approval(self, *_args):
+            calls.append(("decide",))
+            return approval
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    user = SimpleNamespace(user_id="usr_admin", organization_id="org_alpha", role=Role.ADMIN)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(server.decide_approval(
+            "apr_hiredec_stale", server.DecideApprovalRequest(decision="granted"), user
+        ))
+    assert exc.value.status_code == 409
+    assert not any(call[0] == "decide" for call in calls)
 
 
 @pytest.mark.parametrize(
@@ -638,3 +822,103 @@ def test_notification_preferences_are_personal_tenant_scoped_records_with_inacti
     assert ("upsert", "org_alpha", "recruiter_alpha", True, "not_configured") in calls
     assert ("activity", "org_alpha", "recruiter_alpha", "notification.preferences_updated") in calls
     assert ("event", "org_alpha", "world.notification_preference.updated") in calls
+
+
+def test_candidate_communication_requires_active_consent_for_outbound_email(monkeypatch):
+    class _World:
+        async def list_candidate_consents(self, *_args):
+            return []
+
+    async def _candidate(*_args):
+        return SimpleNamespace(candidate_id="cand_alpha")
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "_scoped_candidate", _candidate)
+    user = SimpleNamespace(user_id="recruiter_alpha", organization_id="org_alpha", role=Role.RECRUITER)
+    request = server.CandidateCommunicationCreateRequest(direction="outbound", channel="email", subject="Interview update")
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(server.record_ats_candidate_communication("cand_alpha", request, user))
+
+    assert exc.value.status_code == 409
+    assert "consent" in exc.value.detail.lower()
+
+
+def test_candidate_communication_records_active_consent_and_candidate_activity(monkeypatch):
+    calls = []
+
+    class _World:
+        async def list_candidate_consents(self, *_args):
+            return [server.CandidateConsent(organization_id="org_alpha", candidate_id="cand_alpha", purpose="recruiting")]
+
+        async def record_candidate_communication(self, communication):
+            calls.append(("communication", communication.organization_id, communication.candidate_id, communication.consent_id))
+            return communication
+
+        async def record_activity(self, activity):
+            calls.append(("activity", activity.organization_id, activity.entity_id, activity.event_type))
+            return activity
+
+    class _Governance:
+        async def emit(self, event):
+            calls.append(("event", event.organization_id, event.event_type.value, event.subject_id))
+
+    async def _candidate(*_args):
+        return SimpleNamespace(candidate_id="cand_alpha")
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    monkeypatch.setattr(server, "_scoped_candidate", _candidate)
+    user = SimpleNamespace(user_id="recruiter_alpha", organization_id="org_alpha", role=Role.RECRUITER)
+    request = server.CandidateCommunicationCreateRequest(direction="outbound", channel="email", subject="Interview update")
+
+    result = asyncio.run(server.record_ats_candidate_communication("cand_alpha", request, user))
+
+    assert result["organization_id"] == "org_alpha"
+    assert result["delivery_state"] == "recorded"
+    assert calls[0][0:3] == ("communication", "org_alpha", "cand_alpha")
+    assert ("activity", "org_alpha", "cand_alpha", "candidate.communication_recorded") in calls
+    assert ("event", "org_alpha", "world.candidate_communication.recorded", "cand_alpha") in calls
+
+
+def test_collaboration_mention_validates_a_tenant_user_and_records_candidate_activity(monkeypatch):
+    calls = []
+
+    class _Users:
+        async def find_one(self, query, _projection):
+            calls.append(("user_lookup", query["user_id"], query["organization_id"]))
+            return {"user_id": query["user_id"], "organization_id": query["organization_id"]}
+
+    class _World:
+        async def record_collaboration_mention(self, mention):
+            calls.append(("mention", mention.organization_id, mention.candidate_id, mention.mentioned_user_id))
+            return mention
+
+        async def record_activity(self, activity):
+            calls.append(("activity", activity.organization_id, activity.entity_id, activity.event_type))
+            return activity
+
+    class _Governance:
+        async def emit(self, event):
+            calls.append(("event", event.organization_id, event.event_type.value, event.subject_id))
+
+    async def _candidate(*_args):
+        return SimpleNamespace(candidate_id="cand_alpha")
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    monkeypatch.setattr(server, "db", SimpleNamespace(users=_Users()))
+    monkeypatch.setattr(server, "_scoped_candidate", _candidate)
+    user = SimpleNamespace(user_id="manager_alpha", organization_id="org_alpha", role=Role.HIRING_MANAGER)
+    request = server.CollaborationMentionCreateRequest(
+        mentioned_user_id="recruiter_alpha", context="Please review the structured feedback."
+    )
+
+    result = asyncio.run(server.create_ats_candidate_mention("cand_alpha", request, user))
+
+    assert result["organization_id"] == "org_alpha"
+    assert result["mentioned_user_id"] == "recruiter_alpha"
+    assert ("user_lookup", "recruiter_alpha", "org_alpha") in calls
+    assert ("mention", "org_alpha", "cand_alpha", "recruiter_alpha") in calls
+    assert ("activity", "org_alpha", "cand_alpha", "collaboration.mention_created") in calls
+    assert ("event", "org_alpha", "world.collaboration_mention.created", "cand_alpha") in calls
