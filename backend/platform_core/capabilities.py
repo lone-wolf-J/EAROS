@@ -86,7 +86,7 @@ async def cap_source_candidates(
     world: WorldState = ctx.world
     job_id = inputs["job_id"]
     limit = int(inputs.get("limit", 20))
-    job = await world.get_job(job_id)
+    job = await world.get_job_for_organization(ctx.organization_id, job_id)
     if not job:
         return CapabilityResult(ok=False, error=f"job {job_id} not found")
     candidates = await world.list_candidates(ctx.organization_id, job_id=job_id)
@@ -104,10 +104,10 @@ async def cap_screen_candidate(
     """Deterministic screen based on skill overlap and experience heuristics."""
     world: WorldState = ctx.world
     candidate_id = inputs["candidate_id"]
-    cand = await world.get_candidate(candidate_id)
+    cand = await world.get_candidate_for_organization(ctx.organization_id, candidate_id)
     if not cand:
         return CapabilityResult(ok=False, error="candidate not found")
-    job = await world.get_job(cand.job_id)
+    job = await world.get_job_for_organization(ctx.organization_id, cand.job_id)
     if not job:
         return CapabilityResult(ok=False, error="job not found")
 
@@ -143,10 +143,10 @@ async def cap_advance_stage(
         stage = PipelineStage(target_stage)
     except ValueError:
         return CapabilityResult(ok=False, error=f"invalid stage {target_stage}")
-    cand = await world.get_candidate(candidate_id)
+    cand = await world.get_candidate_for_organization(ctx.organization_id, candidate_id)
     if not cand:
         return CapabilityResult(ok=False, error="candidate not found")
-    await world.set_candidate_stage(candidate_id, stage)
+    await world.set_candidate_stage_for_organization(ctx.organization_id, candidate_id, stage)
     return CapabilityResult(
         ok=True,
         output={"candidate_id": candidate_id, "from": cand.stage.value, "to": stage.value},
@@ -159,10 +159,10 @@ async def cap_draft_outreach(
 ) -> CapabilityResult:
     """Deterministic template-based outreach draft (LLM enrichment lives in Intelligence layer)."""
     world: WorldState = ctx.world
-    cand = await world.get_candidate(inputs["candidate_id"])
+    cand = await world.get_candidate_for_organization(ctx.organization_id, inputs["candidate_id"])
     if not cand:
         return CapabilityResult(ok=False, error="candidate not found")
-    job = await world.get_job(cand.job_id)
+    job = await world.get_job_for_organization(ctx.organization_id, cand.job_id)
     if not job:
         return CapabilityResult(ok=False, error="job not found")
     subject = f"{job.title} @ LevelShift — a role we think fits your profile"
@@ -185,10 +185,10 @@ async def cap_generate_offer(
 ) -> CapabilityResult:
     from platform_core.world import Offer, OfferStatus
     world: WorldState = ctx.world
-    cand = await world.get_candidate(inputs["candidate_id"])
+    cand = await world.get_candidate_for_organization(ctx.organization_id, inputs["candidate_id"])
     if not cand:
         return CapabilityResult(ok=False, error="candidate not found")
-    job = await world.get_job(cand.job_id)
+    job = await world.get_job_for_organization(ctx.organization_id, cand.job_id)
     if not job:
         return CapabilityResult(ok=False, error="job not found")
 
@@ -232,11 +232,11 @@ async def cap_schedule_interview(
     inputs: dict[str, Any], ctx: CapabilityContext
 ) -> CapabilityResult:
     world: WorldState = ctx.world
-    cand = await world.get_candidate(inputs["candidate_id"])
+    cand = await world.get_candidate_for_organization(ctx.organization_id, inputs["candidate_id"])
     if not cand:
         return CapabilityResult(ok=False, error="candidate not found")
     stage_str = inputs.get("stage", "phone_screen")
-    await world.set_candidate_stage(cand.candidate_id, PipelineStage(stage_str))
+    await world.set_candidate_stage_for_organization(ctx.organization_id, cand.candidate_id, PipelineStage(stage_str))
     interviewer = inputs.get("interviewer", "Priya Menon (Engineering)")
     slot = inputs.get("slot", "Tomorrow 10:30 IST")
     return CapabilityResult(
@@ -249,6 +249,215 @@ async def cap_schedule_interview(
         },
         facts=[f"interview scheduled with {interviewer} at {slot}"],
     )
+
+
+async def _requisition_skills(
+    world: WorldState, organization_id: str, requisition_id: str
+) -> tuple[Any, list[str]]:
+    requisition = await world.get_requisition(organization_id, requisition_id)
+    if not requisition:
+        return None, []
+    planned_skills = requisition.hiring_plan.get("required_skills", [])
+    if planned_skills:
+        return requisition, [str(skill) for skill in planned_skills]
+    if requisition.job_id:
+        job = await world.get_job_for_organization(organization_id, requisition.job_id)
+        if job:
+            return requisition, job.required_skills
+    return requisition, []
+
+
+async def cap_match_requisition(
+    inputs: dict[str, Any], ctx: CapabilityContext
+) -> CapabilityResult:
+    """Rank in-tenant prospects against requisition facts without altering state."""
+    world: WorldState = ctx.world
+    requisition_id = inputs["requisition_id"]
+    requisition, required_skills = await _requisition_skills(world, ctx.organization_id, requisition_id)
+    if not requisition:
+        return CapabilityResult(ok=False, error="requisition not found")
+    if not required_skills:
+        return CapabilityResult(ok=False, error="requisition has no required skills in its hiring plan")
+
+    limit = min(max(int(inputs.get("limit", 20)), 1), 100)
+    required = {skill.strip().lower() for skill in required_skills if skill.strip()}
+    matches: list[dict[str, Any]] = []
+    for candidate in await world.list_candidates(ctx.organization_id):
+        candidate_skills = {skill.strip().lower() for skill in candidate.skills if skill.strip()}
+        overlap = sorted(required & candidate_skills)
+        coverage = len(overlap) / max(1, len(required))
+        experience_signal = min(candidate.years_experience / 8.0, 1.0)
+        score = round(0.8 * coverage + 0.2 * experience_signal, 3)
+        if overlap:
+            matches.append({
+                "candidate_id": candidate.candidate_id,
+                "score": score,
+                "matched_skills": overlap,
+                "skill_gaps": sorted(required - candidate_skills),
+            })
+    matches.sort(key=lambda item: item["score"], reverse=True)
+    ranked = matches[:limit]
+    return CapabilityResult(
+        ok=True,
+        output={"requisition_id": requisition_id, "matches": ranked, "count": len(ranked)},
+        facts=[
+            f"compared {len(matches)} eligible prospects against {len(required)} required skills",
+            "ranking is deterministic and does not change candidate or application state",
+        ],
+    )
+
+
+async def cap_score_application(
+    inputs: dict[str, Any], ctx: CapabilityContext
+) -> CapabilityResult:
+    """Persist explainable skill-fit analysis through the governed runtime only."""
+    world: WorldState = ctx.world
+    application = await world.get_application(ctx.organization_id, inputs["application_id"])
+    if not application:
+        return CapabilityResult(ok=False, error="application not found")
+    if not application.requisition_id:
+        return CapabilityResult(ok=False, error="application has no requisition context")
+    candidate = await world.get_candidate_for_organization(ctx.organization_id, application.candidate_id)
+    if not candidate:
+        return CapabilityResult(ok=False, error="candidate not found")
+    requisition, required_skills = await _requisition_skills(world, ctx.organization_id, application.requisition_id)
+    if not requisition or not required_skills:
+        return CapabilityResult(ok=False, error="requisition skill requirements are unavailable")
+
+    required = {skill.strip().lower() for skill in required_skills if skill.strip()}
+    candidate_skills = {skill.strip().lower() for skill in candidate.skills if skill.strip()}
+    overlap = sorted(required & candidate_skills)
+    gaps = sorted(required - candidate_skills)
+    coverage = len(overlap) / max(1, len(required))
+    experience_signal = min(candidate.years_experience / 8.0, 1.0)
+    fit_score = round(0.75 * coverage + 0.25 * experience_signal, 3)
+    summary = f"Matched {len(overlap)} of {len(required)} required skills; experience signal {experience_signal:.0%}."
+    await world.db.applications.update_one(
+        {"organization_id": ctx.organization_id, "application_id": application.application_id},
+        {"$set": {"fit_score": fit_score, "score_summary": summary, "skill_gaps": gaps}},
+    )
+    return CapabilityResult(
+        ok=True,
+        output={"application_id": application.application_id, "fit_score": fit_score, "matched_skills": overlap, "skill_gaps": gaps},
+        facts=[summary, "application fit score updated by a deterministic governed capability"],
+    )
+
+
+async def cap_prepare_interview(
+    inputs: dict[str, Any], ctx: CapabilityContext
+) -> CapabilityResult:
+    """Produce an interview brief from persisted candidate, requisition, and scorecard facts."""
+    world: WorldState = ctx.world
+    interview = await world.get_interview(ctx.organization_id, inputs["interview_id"])
+    if not interview:
+        return CapabilityResult(ok=False, error="interview not found")
+    application = await world.get_application(ctx.organization_id, interview.application_id)
+    candidate = await world.get_candidate_for_organization(ctx.organization_id, interview.candidate_id)
+    if not application or not candidate:
+        return CapabilityResult(ok=False, error="interview context is incomplete")
+    requisition, skills = await _requisition_skills(world, ctx.organization_id, application.requisition_id) if application.requisition_id else (None, [])
+    scorecards = await world.list_scorecards(ctx.organization_id, application.requisition_id)
+    focus_skills = skills[:5] or candidate.skills[:5]
+    agenda = [
+        {"section": "Role context", "minutes": 5, "prompt": f"Explain the role and validate interest in {requisition.title if requisition else 'the opportunity'}."},
+        {"section": "Evidence interview", "minutes": 25, "prompt": f"Request structured examples related to {', '.join(focus_skills) or 'role-relevant competencies'}."},
+        {"section": "Candidate questions", "minutes": 10, "prompt": "Capture questions, constraints, and follow-up commitments."},
+        {"section": "Independent scorecard", "minutes": 5, "prompt": "Submit evidence before reviewing any other interviewer feedback."},
+    ]
+    return CapabilityResult(
+        ok=True,
+        output={"interview_id": interview.interview_id, "candidate_id": candidate.candidate_id, "agenda": agenda, "scorecard_ids": [item.scorecard_id for item in scorecards]},
+        facts=["interview brief assembled from tenant-scoped ATS records", "no interview feedback or hiring decision was generated automatically"],
+    )
+
+
+async def cap_prepare_job_publication(
+    inputs: dict[str, Any], ctx: CapabilityContext
+) -> CapabilityResult:
+    """Build a reviewable job-board packet; never publishes to a third party."""
+    world: WorldState = ctx.world
+    requisition = await world.get_requisition(ctx.organization_id, inputs["requisition_id"])
+    if not requisition:
+        return CapabilityResult(ok=False, error="requisition not found")
+    boards = inputs.get("boards", ["internal_careers", "indeed", "linkedin", "jooble"])
+    if not isinstance(boards, list) or not all(isinstance(board, str) for board in boards):
+        return CapabilityResult(ok=False, error="boards must be a list of board identifiers")
+    return CapabilityResult(
+        ok=True,
+        output={
+            "requisition_id": requisition.requisition_id,
+            "title": requisition.title,
+            "location": requisition.location,
+            "employment_type": requisition.employment_type,
+            "headcount": requisition.headcount,
+            "targets": boards,
+            "external_publish_state": "draft_only",
+        },
+        facts=["job-board packet prepared without sending to any third party", "external publication requires a configured adapter and explicit human approval"],
+    )
+
+
+async def cap_triage_requisition(
+    inputs: dict[str, Any], ctx: CapabilityContext
+) -> CapabilityResult:
+    """Surface reviewable recruiting blockers without changing records or sending messages."""
+    world: WorldState = ctx.world
+    requisition = await world.get_requisition(ctx.organization_id, inputs["requisition_id"])
+    if not requisition:
+        return CapabilityResult(ok=False, error="requisition not found")
+    applications = await world.list_applications(ctx.organization_id, requisition_id=requisition.requisition_id)
+    actions: list[dict[str, str]] = []
+    for application in applications:
+        if application.fit_score is None:
+            actions.append({"priority": "high", "action": "score_application", "application_id": application.application_id, "reason": "fit score is missing"})
+        elif application.current_stage_name.lower() in {"interview", "onsite"}:
+            interviews = await world.list_interviews(ctx.organization_id, application_id=application.application_id)
+            if not interviews:
+                actions.append({"priority": "medium", "action": "schedule_interview", "application_id": application.application_id, "reason": "interview-stage application has no scheduled interview"})
+    return CapabilityResult(
+        ok=True,
+        output={"requisition_id": requisition.requisition_id, "actions": actions[:50], "count": len(actions)},
+        facts=["triage returns recommendations only; recruiters decide whether to plan and execute each follow-up"],
+    )
+
+
+async def _execute_retention_action(
+    inputs: dict[str, Any], ctx: CapabilityContext, expected_action: str
+) -> CapabilityResult:
+    """Execute only the explicitly approved retention action through the runtime."""
+    retention_case_id = str(inputs.get("retention_case_id", "")).strip()
+    if not retention_case_id:
+        return CapabilityResult(ok=False, error="retention_case_id is required")
+    try:
+        retention_case = await ctx.world.execute_retention_case(
+            ctx.organization_id, retention_case_id, expected_action=expected_action
+        )
+    except ValueError as exc:
+        return CapabilityResult(ok=False, error=str(exc))
+    if not retention_case:
+        return CapabilityResult(ok=False, error="retention case not found")
+    return CapabilityResult(
+        ok=True,
+        output={
+            "retention_case_id": retention_case.retention_case_id,
+            "subject_type": retention_case.subject_type,
+            "subject_id": retention_case.subject_id,
+            "action": expected_action,
+            "status": retention_case.status.value,
+        },
+        facts=[
+            "retention action executed only after an approved non-held review case",
+            "archive removes the subject from active operations; erasure redacts direct operational data while retaining minimum governance evidence",
+        ],
+    )
+
+
+async def cap_execute_retention_archive(inputs: dict[str, Any], ctx: CapabilityContext) -> CapabilityResult:
+    return await _execute_retention_action(inputs, ctx, "archive")
+
+
+async def cap_execute_retention_erasure(inputs: dict[str, Any], ctx: CapabilityContext) -> CapabilityResult:
+    return await _execute_retention_action(inputs, ctx, "erase")
 
 
 BUILTIN_CAPABILITIES: list[tuple[CapabilitySpec, CapabilityHandler]] = [
@@ -324,6 +533,93 @@ BUILTIN_CAPABILITIES: list[tuple[CapabilitySpec, CapabilityHandler]] = [
             permissions=["world.candidates.write"],
         ),
         cap_schedule_interview,
+    ),
+    (
+        CapabilitySpec(
+            capability_id="cap.match_requisition",
+            name="Match Requisition",
+            description="Deterministically rank in-tenant prospects against requisition skills.",
+            category="sourcing",
+            inputs={"requisition_id": "str", "limit": "int?"},
+            outputs={"matches": "list[Match]", "count": "int"},
+            permissions=["world.requisitions.read", "world.candidates.read"],
+        ),
+        cap_match_requisition,
+    ),
+    (
+        CapabilitySpec(
+            capability_id="cap.score_application",
+            name="Score Application",
+            description="Persist explainable skill-fit analysis for one application.",
+            category="screening",
+            inputs={"application_id": "str"},
+            outputs={"fit_score": "float", "matched_skills": "list[str]", "skill_gaps": "list[str]"},
+            permissions=["world.applications.read", "world.applications.write", "world.candidates.read"],
+        ),
+        cap_score_application,
+    ),
+    (
+        CapabilitySpec(
+            capability_id="cap.prepare_interview",
+            name="Prepare Interview",
+            description="Prepare a grounded structured-interview brief without deciding outcomes.",
+            category="interview",
+            inputs={"interview_id": "str"},
+            outputs={"agenda": "list[AgendaItem]", "scorecard_ids": "list[str]"},
+            permissions=["world.interviews.read", "world.scorecards.read", "world.candidates.read"],
+        ),
+        cap_prepare_interview,
+    ),
+    (
+        CapabilitySpec(
+            capability_id="cap.prepare_job_publication",
+            name="Prepare Job Publication",
+            description="Create a reviewable job-distribution packet without publishing externally.",
+            category="ops",
+            sensitivity=Sensitivity.CONFIDENTIAL,
+            inputs={"requisition_id": "str", "boards": "list[str]?"},
+            outputs={"external_publish_state": "str", "targets": "list[str]"},
+            permissions=["world.requisitions.read"],
+        ),
+        cap_prepare_job_publication,
+    ),
+    (
+        CapabilitySpec(
+            capability_id="cap.triage_requisition",
+            name="Triage Requisition",
+            description="Surface reviewable recruiting blockers without moving records or sending messages.",
+            category="ops",
+            inputs={"requisition_id": "str"},
+            outputs={"actions": "list[TriageAction]", "count": "int"},
+            permissions=["world.requisitions.read", "world.applications.read", "world.interviews.read"],
+        ),
+        cap_triage_requisition,
+    ),
+    (
+        CapabilitySpec(
+            capability_id="cap.execute_retention_archive",
+            name="Execute Retention Archive",
+            description="Archive an approved, non-held candidate or application retention case.",
+            category="ops",
+            sensitivity=Sensitivity.RESTRICTED,
+            inputs={"retention_case_id": "str"},
+            outputs={"retention_case_id": "str", "status": "str"},
+            permissions=["world.retention.execute", "world.candidates.write", "world.applications.write"],
+        ),
+        cap_execute_retention_archive,
+    ),
+    (
+        CapabilitySpec(
+            capability_id="cap.execute_retention_erasure",
+            name="Execute Retention Erasure",
+            description="Redact approved, non-held candidate or application operational data while preserving minimum governance evidence.",
+            category="ops",
+            sensitivity=Sensitivity.RESTRICTED,
+            inputs={"retention_case_id": "str"},
+            outputs={"retention_case_id": "str", "status": "str"},
+            permissions=["world.retention.execute", "world.candidates.write", "world.applications.write"],
+        ),
+        cap_execute_retention_erasure,
     ),
 ]
 

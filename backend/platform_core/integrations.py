@@ -28,6 +28,19 @@ class IntegrationSpec(BaseModel):
     coverage_geo: list[str]
 
 
+class JobDistributionAdapter(BaseModel):
+    """Provider capability metadata; connection state is never inferred from a catalog entry."""
+    model_config = ConfigDict(extra="ignore")
+    adapter_id: str
+    name: str
+    provider: str
+    operations: list[str]
+    configuration_state: str = "not_configured"  # not_configured | connected | disabled
+    requires_human_approval: bool = True
+    credential_fields: list[str]
+    notes: str
+
+
 def _sync_ago(seed: str, max_min: int = 90) -> str:
     r = random.Random(seed)
     dt = datetime.now(timezone.utc) - timedelta(minutes=r.randint(1, max_min))
@@ -82,5 +95,52 @@ INTEGRATIONS: list[IntegrationSpec] = [
 ]
 
 
+# These descriptors expose what EAROS can orchestrate only after an administrator
+# supplies provider credentials. They deliberately make no claim about live provider
+# connectivity, record volume, board account status, or publication success.
+JOB_DISTRIBUTION_ADAPTERS: list[JobDistributionAdapter] = [
+    JobDistributionAdapter(
+        adapter_id="jobboard.linkedin", name="LinkedIn Jobs", provider="linkedin",
+        operations=["prepare_post", "publish_post", "update_post", "close_post"],
+        credential_fields=["organization_id", "oauth_connection"],
+        notes="External publishing is available only through an approved LinkedIn organization connection.",
+    ),
+    JobDistributionAdapter(
+        adapter_id="jobboard.dice", name="Dice", provider="dice",
+        operations=["prepare_post", "publish_post", "update_post", "close_post"],
+        credential_fields=["client_id", "client_secret", "account_id"],
+        notes="Requires a contracted Dice employer API account and explicit publication approval.",
+    ),
+    JobDistributionAdapter(
+        adapter_id="jobboard.indeed", name="Indeed", provider="indeed",
+        operations=["prepare_post", "publish_post", "update_post", "close_post"],
+        credential_fields=["publisher_account", "api_token"],
+        notes="Requires a supported Indeed employer or publisher integration before publication can be requested.",
+    ),
+    JobDistributionAdapter(
+        adapter_id="jobboard.ziprecruiter", name="ZipRecruiter", provider="ziprecruiter",
+        operations=["prepare_post", "publish_post", "update_post", "close_post"],
+        credential_fields=["api_key", "account_id"],
+        notes="Requires an authorized ZipRecruiter employer account and a human approval record.",
+    ),
+    JobDistributionAdapter(
+        adapter_id="jobboard.jobspikr", name="Jobspikr", provider="jobspikr",
+        operations=["source_sync", "prepare_export"],
+        credential_fields=["api_key", "project_id"],
+        notes="Source synchronization remains read-oriented until the administrator configures a provider connection.",
+    ),
+    JobDistributionAdapter(
+        adapter_id="jobboard.jooble", name="Jooble", provider="jooble",
+        operations=["prepare_post", "publish_post", "update_post", "close_post"],
+        credential_fields=["api_key", "company_id"],
+        notes="Requires a Jooble employer publication agreement and explicit approval for each external action.",
+    ),
+]
+
+
 def list_integrations() -> list[IntegrationSpec]:
     return INTEGRATIONS
+
+
+def list_job_distribution_adapters() -> list[JobDistributionAdapter]:
+    return JOB_DISTRIBUTION_ADAPTERS

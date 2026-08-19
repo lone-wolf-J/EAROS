@@ -8,30 +8,33 @@ import {
 } from "react-router-dom";
 import "@/App.css";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
-import Landing from "@/pages/Landing";
-import AuthCallback from "@/pages/AuthCallback";
-import MissionControl from "@/pages/MissionControl";
-import Scenarios from "@/pages/Scenarios";
-import HiringIntake from "@/pages/HiringIntake";
-import HiringDashboard from "@/pages/HiringDashboard";
-import RecruiterCopilot from "@/pages/RecruiterCopilot";
-import ExecutiveCopilot from "@/pages/ExecutiveCopilot";
-import CandidateAssistant from "@/pages/CandidateAssistant";
-import Governance from "@/pages/Governance";
-import PolicyManager from "@/pages/PolicyManager";
-import CapabilityRegistry from "@/pages/CapabilityRegistry";
-import WorldStateExplorer from "@/pages/WorldStateExplorer";
-import PlannerView from "@/pages/PlannerView";
-import ReflectionReports from "@/pages/ReflectionReports";
-import Agents from "@/pages/Agents";
-import Integrations from "@/pages/Integrations";
-import Sourcing from "@/pages/Sourcing";
-import ResumeStudio from "@/pages/ResumeStudio";
-import OutreachStudio from "@/pages/OutreachStudio";
-import Screening from "@/pages/Screening";
-import VoiceInterview from "@/pages/VoiceInterview";
-import InterviewSuite from "@/pages/InterviewSuite";
-import DeepDive from "@/pages/DeepDive";
+const Landing = React.lazy(() => import("@/pages/Landing"));
+const AuthCallback = React.lazy(() => import("@/pages/AuthCallback"));
+const MissionControl = React.lazy(() => import("@/pages/MissionControl"));
+const Scenarios = React.lazy(() => import("@/pages/Scenarios"));
+const HiringIntake = React.lazy(() => import("@/pages/HiringIntake"));
+const HiringDashboard = React.lazy(() => import("@/pages/HiringDashboard"));
+const RecruiterCopilot = React.lazy(() => import("@/pages/RecruiterCopilot"));
+const ExecutiveCopilot = React.lazy(() => import("@/pages/ExecutiveCopilot"));
+const CandidateAssistant = React.lazy(() => import("@/pages/CandidateAssistant"));
+const Governance = React.lazy(() => import("@/pages/Governance"));
+const PolicyManager = React.lazy(() => import("@/pages/PolicyManager"));
+const CapabilityRegistry = React.lazy(() => import("@/pages/CapabilityRegistry"));
+const WorldStateExplorer = React.lazy(() => import("@/pages/WorldStateExplorer"));
+const PlannerView = React.lazy(() => import("@/pages/PlannerView"));
+const ReflectionReports = React.lazy(() => import("@/pages/ReflectionReports"));
+const Agents = React.lazy(() => import("@/pages/Agents"));
+const Integrations = React.lazy(() => import("@/pages/Integrations"));
+const Sourcing = React.lazy(() => import("@/pages/Sourcing"));
+const ResumeStudio = React.lazy(() => import("@/pages/ResumeStudio"));
+const OutreachStudio = React.lazy(() => import("@/pages/OutreachStudio"));
+const Screening = React.lazy(() => import("@/pages/Screening"));
+const VoiceInterview = React.lazy(() => import("@/pages/VoiceInterview"));
+const InterviewSuite = React.lazy(() => import("@/pages/InterviewSuite"));
+const DeepDive = React.lazy(() => import("@/pages/DeepDive"));
+const ATSOperations = React.lazy(() => import("@/pages/ATSOperations"));
+const ATSAutonomy = React.lazy(() => import("@/pages/ATSAutonomy"));
+const EnterpriseControls = React.lazy(() => import("@/pages/EnterpriseControls"));
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -51,6 +54,9 @@ const ROUTES = [
   ["/scenarios", Scenarios],
   ["/intake", HiringIntake],
   ["/dashboard", HiringDashboard],
+  ["/ats", ATSOperations],
+  ["/ats/workflows", ATSAutonomy],
+  ["/enterprise-controls", EnterpriseControls],
   ["/recruiter", RecruiterCopilot],
   ["/sourcing", Sourcing],
   ["/resume", ResumeStudio],
@@ -77,22 +83,24 @@ function AppRouter() {
     return <AuthCallback />;
   }
   return (
-    <Routes>
-      <Route path="/" element={<Landing />} />
-      <Route path="/auth/callback" element={<AuthCallback />} />
-      {ROUTES.map(([path, Comp]) => (
-        <Route
-          key={path}
-          path={path}
-          element={
-            <Protected>
-              <Comp />
-            </Protected>
-          }
-        />
-      ))}
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <React.Suspense fallback={<div className="min-h-screen bg-slate-950 text-slate-500 flex items-center justify-center font-mono text-sm"><span className="animate-pulse">Loading EAROS workspace…</span></div>}>
+      <Routes>
+        <Route path="/" element={<Landing />} />
+        <Route path="/auth/callback" element={<AuthCallback />} />
+        {ROUTES.map(([path, Comp]) => (
+          <Route
+            key={path}
+            path={path}
+            element={
+              <Protected>
+                <Comp />
+              </Protected>
+            }
+          />
+        ))}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </React.Suspense>
   );
 }
 

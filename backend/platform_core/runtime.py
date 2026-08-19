@@ -94,7 +94,10 @@ class Runtime:
         ).sort("started_at", -1).to_list(limit)
         return [ExecutionRecord(**d) for d in docs]
 
-    async def execute(self, ex: ExecutionRecord) -> ExecutionRecord:
+    async def execute(
+        self, ex: ExecutionRecord, preapproved_step_ids: Optional[set[str]] = None
+    ) -> ExecutionRecord:
+        preapproved_step_ids = preapproved_step_ids or set()
         ex.status = ExecutionStatus.RUNNING
         ex.started_at = utcnow_iso()
         await self._persist(ex)
@@ -108,7 +111,11 @@ class Runtime:
             correlation_id=ex.correlation_id,
         ))
 
-        completed: dict[str, dict[str, Any]] = {}
+        completed: dict[str, dict[str, Any]] = {
+            result["step_id"]: result.get("output") or {}
+            for result in ex.step_results
+            if result.get("ok") and result.get("step_id")
+        }
 
         try:
             for step in ex.steps:
@@ -116,6 +123,8 @@ class Runtime:
                 unmet = [d for d in step.depends_on if d not in completed]
                 if unmet:
                     raise RuntimeError(f"unmet deps: {unmet}")
+                if step.step_id in completed:
+                    continue
 
                 # 1. Policy evaluation for this step
                 pol_ctx = PolicyContext(
@@ -152,7 +161,10 @@ class Runtime:
                     ))
                     return ex
 
-                if pol_result.decision == PolicyDecision.REQUIRE_APPROVAL:
+                if (
+                    pol_result.decision == PolicyDecision.REQUIRE_APPROVAL
+                    and step.step_id not in preapproved_step_ids
+                ):
                     approval = await self.governance.request_approval(Approval(
                         organization_id=ex.organization_id,
                         subject_type="execution_step",
@@ -273,3 +285,56 @@ class Runtime:
                 payload={"reason": str(e)}, correlation_id=ex.correlation_id,
             ))
             return ex
+
+    async def resume_after_approval(
+        self, execution_id: str, organization_id: str
+    ) -> ExecutionRecord:
+        """Resume only the recorded steps whose approvals were explicitly granted."""
+        ex = await self.get_execution(execution_id)
+        if not ex or ex.organization_id != organization_id:
+            raise ValueError("execution not found for organization")
+        if ex.status != ExecutionStatus.AWAITING_APPROVAL:
+            return ex
+
+        approvals = [
+            await self.governance.get_approval(approval_id)
+            for approval_id in ex.pending_approvals
+        ]
+        if not approvals or any(approval is None for approval in approvals):
+            return ex
+        if any(approval.status == "denied" for approval in approvals if approval):
+            ex.status = ExecutionStatus.POLICY_BLOCKED
+            ex.error = "required approval was denied"
+            ex.finished_at = utcnow_iso()
+            await self._persist(ex)
+            await self.governance.emit(DomainEvent(
+                event_type=EventType.EXECUTION_FAILED,
+                actor=ex.user_id,
+                subject_type="execution",
+                subject_id=ex.execution_id,
+                organization_id=ex.organization_id,
+                payload={"reason": ex.error},
+                correlation_id=ex.correlation_id,
+            ))
+            return ex
+        if any(approval.status != "granted" for approval in approvals if approval):
+            return ex
+
+        approved_step_ids = {
+            approval.subject_id for approval in approvals
+            if approval and approval.subject_type == "execution_step"
+        }
+        ex.pending_approvals = []
+        ex.status = ExecutionStatus.PENDING
+        ex.error = None
+        await self._persist(ex)
+        await self.governance.emit(DomainEvent(
+            event_type=EventType.EXECUTION_RESUMED,
+            actor="runtime",
+            subject_type="execution",
+            subject_id=ex.execution_id,
+            organization_id=ex.organization_id,
+            payload={"approved_step_ids": sorted(approved_step_ids)},
+            correlation_id=ex.correlation_id,
+        ))
+        return await self.execute(ex, preapproved_step_ids=approved_step_ids)

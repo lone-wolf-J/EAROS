@@ -346,6 +346,7 @@ async def seed_all(db: AsyncIOMotorDatabase) -> dict[str, int]:
     policies = [
         Policy(
             policy_id="pol.offer_requires_approval",
+            organization_id=ORG_ID,
             name="Offer Extension Requires Human Approval",
             description="All offer generation and offer extension actions require human approval "
                         "regardless of AI confidence.",
@@ -355,6 +356,7 @@ async def seed_all(db: AsyncIOMotorDatabase) -> dict[str, int]:
         ),
         Policy(
             policy_id="pol.min_confidence_advance",
+            organization_id=ORG_ID,
             name="Minimum Confidence to Advance Stage",
             description="Advancing a candidate stage via runtime requires >= 0.60 confidence.",
             scope="cap.advance_stage",
@@ -362,6 +364,7 @@ async def seed_all(db: AsyncIOMotorDatabase) -> dict[str, int]:
         ),
         Policy(
             policy_id="pol.min_confidence_screen",
+            organization_id=ORG_ID,
             name="Minimum Confidence to Screen",
             description="Screening runs must have >= 0.50 confidence.",
             scope="cap.screen_candidate",
@@ -369,6 +372,7 @@ async def seed_all(db: AsyncIOMotorDatabase) -> dict[str, int]:
         ),
         Policy(
             policy_id="pol.confidential_execution",
+            organization_id=ORG_ID,
             name="Confidential Data Handling",
             description="Any capability touching confidential data must pass through policy audit.",
             scope="*",
@@ -376,6 +380,7 @@ async def seed_all(db: AsyncIOMotorDatabase) -> dict[str, int]:
         ),
         Policy(
             policy_id="pol.recruiter_scope",
+            organization_id=ORG_ID,
             name="Recruiter Scope of Action",
             description="Recruiters may draft outreach and screen candidates autonomously.",
             scope="cap.draft_outreach",
@@ -384,7 +389,7 @@ async def seed_all(db: AsyncIOMotorDatabase) -> dict[str, int]:
     ]
     for p in policies:
         await db.policies.update_one(
-            {"policy_id": p.policy_id}, {"$set": p.model_dump()}, upsert=True
+            {"policy_id": p.policy_id, "organization_id": p.organization_id}, {"$set": p.model_dump()}, upsert=True
         )
 
     # ---- Demo users ----

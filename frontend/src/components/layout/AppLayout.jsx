@@ -4,6 +4,7 @@ import {
   Activity,
   Boxes,
   Building2,
+  ClipboardList,
   Cpu,
   FileWarning,
   Gauge,
@@ -14,6 +15,7 @@ import {
   LogOut,
   Radar,
   ScrollText,
+  ShieldCheck,
   Sparkles,
   Users2,
 } from "lucide-react";
@@ -25,6 +27,7 @@ const NAV = [
   { key: "scenarios", to: "/scenarios", label: "Demo Scenarios", icon: Sparkles, group: "APPS" },
   { key: "intake", to: "/intake", label: "Hiring Intake", icon: Headphones, group: "APPS" },
   { key: "dashboard", to: "/dashboard", label: "Hiring Dashboard", icon: Gauge, group: "APPS" },
+  { key: "ats", to: "/ats", label: "ATS Operations", icon: ClipboardList, group: "APPS" },
   { key: "recruiter", to: "/recruiter", label: "Recruiter Copilot", icon: Users2, group: "APPS" },
   { key: "sourcing", to: "/sourcing", label: "Sourcing", icon: Radar, group: "APPS" },
   { key: "resume", to: "/resume", label: "Resume Studio", icon: ScrollText, group: "APPS" },
@@ -34,6 +37,7 @@ const NAV = [
   { key: "candidate", to: "/candidate", label: "Candidate Assistant", icon: Headphones, group: "APPS" },
 
   { key: "planner", to: "/planner", label: "Planner", icon: GitBranch, group: "INTELLIGENCE" },
+  { key: "ats-workflows", to: "/ats/workflows", label: "ATS Autonomy", icon: GitBranch, group: "INTELLIGENCE" },
   { key: "deep-dive", to: "/deep-dive", label: "Agent Deep-Dive", icon: History, group: "INTELLIGENCE" },
   { key: "agents", to: "/agents", label: "Agent Registry", icon: Cpu, group: "INTELLIGENCE" },
   { key: "integrations", to: "/integrations", label: "Integrations", icon: Layers, group: "INTELLIGENCE" },
@@ -42,6 +46,7 @@ const NAV = [
   { key: "capabilities", to: "/capabilities", label: "Capabilities", icon: Boxes, group: "PLATFORM" },
   { key: "policies", to: "/policies", label: "Policies", icon: FileWarning, group: "PLATFORM" },
   { key: "governance", to: "/governance", label: "Governance", icon: ScrollText, group: "PLATFORM" },
+  { key: "enterprise-controls", to: "/enterprise-controls", label: "Enterprise Controls", icon: ShieldCheck, group: "PLATFORM" },
   { key: "reflection", to: "/reflection", label: "Reflection", icon: History, group: "PLATFORM" },
 ];
 

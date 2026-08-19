@@ -139,7 +139,8 @@ async def mission_snapshot(
         "approvals_pending": len(approvals),
         "reflections_total": await db.reflections.count_documents(
             {"organization_id": organization_id}),
-        "policies_active": await db.policies.count_documents({"enabled": True}),
+        "policies_active": await db.policies.count_documents(
+            {"organization_id": organization_id, "enabled": True}),
         "candidates_total": await db.candidates.count_documents(
             {"organization_id": organization_id}),
         "open_reqs": await db.jobs.count_documents(

@@ -4,7 +4,10 @@ require("dotenv").config();
 
 // Check if we're in development/preview mode (not production build)
 // Craco sets NODE_ENV=development for start, NODE_ENV=production for build
-const isDevServer = process.env.NODE_ENV !== "production";
+// CRACO loads this file before react-scripts always finalizes NODE_ENV. Inspect the
+// command as well so a production `craco build` never receives development-only
+// React Refresh or visual-editing transforms.
+const isDevServer = process.argv.some((argument) => argument === "start" || argument.endsWith("/start"));
 
 // Environment variable overrides
 const config = {

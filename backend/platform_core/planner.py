@@ -56,11 +56,18 @@ Available capabilities (use ONLY these IDs):
 - cap.draft_outreach(candidate_id)
 - cap.generate_offer(candidate_id, base_salary?, equity_units?, signing_bonus?)
 - cap.schedule_interview(candidate_id, stage?, interviewer?, slot?)
+- cap.match_requisition(requisition_id, limit?)
+- cap.score_application(application_id)
+- cap.prepare_interview(interview_id)
+- cap.prepare_job_publication(requisition_id, boards?)
+- cap.triage_requisition(requisition_id)
 
 Principles:
 - Reason step-by-step against the world state facts provided.
 - Prefer minimum viable plans.
 - Only propose offer generation when candidate is at 'onsite' or later.
+- Job publication capability creates a draft packet only; never claim an external board was published to.
+- Interview preparation and workflow triage are recommendations only; never infer or submit hiring feedback.
 - If information is missing, propose the retrieval step first.
 """
 
@@ -130,7 +137,7 @@ class Planner:
         facts: dict[str, Any] = {"organization_id": organization_id, "gathered_at": utcnow_iso()}
         job_id = context.get("job_id")
         if job_id:
-            job = await self.world.get_job(job_id)
+            job = await self.world.get_job_for_organization(organization_id, job_id)
             if job:
                 facts["job"] = job.model_dump()
                 cands = await self.world.list_candidates(organization_id, job_id=job_id)
@@ -142,13 +149,24 @@ class Planner:
                 ]
         cand_id = context.get("candidate_id")
         if cand_id:
-            c = await self.world.get_candidate(cand_id)
+            c = await self.world.get_candidate_for_organization(organization_id, cand_id)
             if c:
                 facts["candidate"] = c.model_dump()
                 if not facts.get("job"):
-                    j = await self.world.get_job(c.job_id)
+                    j = await self.world.get_job_for_organization(organization_id, c.job_id)
                     if j:
                         facts["job"] = j.model_dump()
+        requisition_id = context.get("requisition_id")
+        if requisition_id:
+            requisition = await self.world.get_requisition(organization_id, requisition_id)
+            if requisition:
+                facts["requisition"] = requisition.model_dump()
+                facts["applications"] = [
+                    application.model_dump()
+                    for application in await self.world.list_applications(
+                        organization_id, requisition_id=requisition_id
+                    )
+                ][:30]
         return facts
 
     async def _llm_plan(
@@ -184,11 +202,69 @@ class Planner:
     ) -> dict[str, Any]:
         job_id = context.get("job_id") or (facts.get("job") or {}).get("job_id")
         candidate_id = context.get("candidate_id")
+        requisition_id = context.get("requisition_id")
+        application_id = context.get("application_id")
+        interview_id = context.get("interview_id")
         steps: list[dict[str, Any]] = []
         reasoning: list[dict[str, Any]] = []
 
         goal_low = goal.lower()
-        if "screen" in goal_low and candidate_id:
+        if "score" in goal_low and application_id:
+            steps = [{
+                "capability_id": "cap.score_application",
+                "inputs": {"application_id": application_id},
+                "description": "Persist an explainable application fit score.",
+                "confidence": 0.82,
+            }]
+            reasoning = [{
+                "step": 1, "thought": "Application scoring is deterministic against requisition requirements.",
+                "conclusion": "Invoke cap.score_application under policy control."
+            }]
+        elif "match" in goal_low and requisition_id:
+            steps = [{
+                "capability_id": "cap.match_requisition",
+                "inputs": {"requisition_id": requisition_id, "limit": 20},
+                "description": "Rank tenant prospects against the requisition skill requirements.",
+                "confidence": 0.78,
+            }]
+            reasoning = [{
+                "step": 1, "thought": "Prospect matching can be a read-only deterministic comparison.",
+                "conclusion": "Invoke cap.match_requisition without altering candidate state."
+            }]
+        elif "publication" in goal_low and requisition_id:
+            steps = [{
+                "capability_id": "cap.prepare_job_publication",
+                "inputs": {"requisition_id": requisition_id},
+                "description": "Prepare a reviewable job-distribution packet.",
+                "confidence": 0.8, "sensitivity": "confidential",
+            }]
+            reasoning = [{
+                "step": 1, "thought": "No board adapter is allowed to publish from a plan.",
+                "conclusion": "Prepare a draft packet for human review only."
+            }]
+        elif "triage" in goal_low and requisition_id:
+            steps = [{
+                "capability_id": "cap.triage_requisition",
+                "inputs": {"requisition_id": requisition_id},
+                "description": "Surface missing scores and interview scheduling blockers.",
+                "confidence": 0.8,
+            }]
+            reasoning = [{
+                "step": 1, "thought": "Workflow triage should surface facts without automating stage movement.",
+                "conclusion": "Invoke cap.triage_requisition as a recommendation."
+            }]
+        elif "interview prep" in goal_low and interview_id:
+            steps = [{
+                "capability_id": "cap.prepare_interview",
+                "inputs": {"interview_id": interview_id},
+                "description": "Build a structured, evidence-oriented interview brief.",
+                "confidence": 0.8,
+            }]
+            reasoning = [{
+                "step": 1, "thought": "Interview preparation is grounded in tenant records and scorecards.",
+                "conclusion": "Invoke cap.prepare_interview without generating feedback."
+            }]
+        elif "screen" in goal_low and candidate_id:
             steps = [{
                 "capability_id": "cap.screen_candidate",
                 "inputs": {"candidate_id": candidate_id},

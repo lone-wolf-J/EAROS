@@ -1,0 +1,24 @@
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - ./backend/.env
+    environment:
+      EAROS_ENV: production
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_BACKEND_URL: ${EAROS_PUBLIC_API_ORIGIN:?Set EAROS_PUBLIC_API_ORIGIN to the public HTTPS API origin}
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      - api

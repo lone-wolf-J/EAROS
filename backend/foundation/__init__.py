@@ -23,7 +23,19 @@ def new_organization_id() -> str: return _new_id("org")
 def new_department_id() -> str: return _new_id("dept")
 def new_team_id() -> str: return _new_id("team")
 def new_job_id() -> str: return _new_id("job")
+def new_requisition_id() -> str: return _new_id("req")
 def new_candidate_id() -> str: return _new_id("cand")
+def new_application_id() -> str: return _new_id("app")
+def new_pipeline_id() -> str: return _new_id("pipe")
+def new_pipeline_stage_id() -> str: return _new_id("stage")
+def new_talent_pool_id() -> str: return _new_id("pool")
+def new_consent_id() -> str: return _new_id("consent")
+def new_resume_id() -> str: return _new_id("resume")
+def new_interview_id() -> str: return _new_id("interview")
+def new_scorecard_id() -> str: return _new_id("scorecard")
+def new_feedback_id() -> str: return _new_id("feedback")
+def new_activity_id() -> str: return _new_id("activity")
+def new_communication_id() -> str: return _new_id("comm")
 def new_offer_id() -> str: return _new_id("offer")
 def new_skill_id() -> str: return _new_id("skill")
 def new_policy_id() -> str: return _new_id("pol")
@@ -37,6 +49,9 @@ def new_user_id() -> str: return _new_id("user")
 def new_session_id() -> str: return _new_id("sess")
 def new_approval_id() -> str: return _new_id("apr")
 def new_reflection_id() -> str: return _new_id("refl")
+def new_retention_case_id() -> str: return _new_id("ret")
+def new_audit_export_id() -> str: return _new_id("auditexp")
+def new_onboarding_handoff_id() -> str: return _new_id("handoff")
 
 
 def utcnow() -> datetime:
@@ -84,12 +99,67 @@ class JobStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class RequisitionStatus(str, Enum):
+    DRAFT = "draft"
+    PENDING_APPROVAL = "pending_approval"
+    OPEN = "open"
+    ON_HOLD = "on_hold"
+    FILLED = "filled"
+    CANCELLED = "cancelled"
+    ARCHIVED = "archived"
+
+
+class ApplicationStatus(str, Enum):
+    ACTIVE = "active"
+    WITHDRAWN = "withdrawn"
+    REJECTED = "rejected"
+    HIRED = "hired"
+    ARCHIVED = "archived"
+
+
+class InterviewStatus(str, Enum):
+    SCHEDULED = "scheduled"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    NO_SHOW = "no_show"
+
+
+class ConsentStatus(str, Enum):
+    GRANTED = "granted"
+    REVOKED = "revoked"
+    EXPIRED = "expired"
+
+
 class OfferStatus(str, Enum):
     DRAFT = "draft"
     PENDING_APPROVAL = "pending_approval"
     EXTENDED = "extended"
     ACCEPTED = "accepted"
     DECLINED = "declined"
+
+
+class RetentionCaseStatus(str, Enum):
+    PENDING_REVIEW = "pending_review"
+    ON_HOLD = "on_hold"
+    APPROVED_FOR_ARCHIVE = "approved_for_archive"
+    APPROVED_FOR_ERASURE = "approved_for_erasure"
+    COMPLETED = "completed"
+    REJECTED = "rejected"
+
+
+class AuditExportStatus(str, Enum):
+    REQUESTED = "requested"
+    READY = "ready"
+    EXPIRED = "expired"
+
+
+class OnboardingHandoffStatus(str, Enum):
+    DRAFT = "draft"
+    READY_FOR_HANDOFF = "ready_for_handoff"
+    ACKNOWLEDGED = "acknowledged"
+    BLOCKED = "blocked"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
 
 
 class ExecutionStatus(str, Enum):
@@ -112,6 +182,7 @@ class EventType(str, Enum):
     # Runtime
     PLAN_CREATED = "runtime.plan.created"
     EXECUTION_STARTED = "runtime.execution.started"
+    EXECUTION_RESUMED = "runtime.execution.resumed"
     EXECUTION_COMPLETED = "runtime.execution.completed"
     EXECUTION_FAILED = "runtime.execution.failed"
     STEP_STARTED = "runtime.step.started"
@@ -125,8 +196,23 @@ class EventType(str, Enum):
     APPROVAL_DENIED = "governance.approval.denied"
     # World
     CANDIDATE_STAGE_CHANGED = "world.candidate.stage_changed"
+    CANDIDATE_CREATED = "world.candidate.created"
+    CANDIDATE_DEDUPLICATED = "world.candidate.deduplicated"
+    APPLICATION_CREATED = "world.application.created"
+    APPLICATION_STAGE_CHANGED = "world.application.stage_changed"
+    REQUISITION_CREATED = "world.requisition.created"
+    INTERVIEW_SCHEDULED = "world.interview.scheduled"
+    SCORECARD_SUBMITTED = "world.scorecard.submitted"
+    CONSENT_RECORDED = "world.consent.recorded"
     OFFER_EXTENDED = "world.offer.extended"
     JOB_CREATED = "world.job.created"
+    RETENTION_CASE_REQUESTED = "world.retention_case.requested"
+    RETENTION_CASE_DECIDED = "world.retention_case.decided"
+    RETENTION_ARCHIVE_COMPLETED = "world.retention.archive_completed"
+    RETENTION_ERASURE_COMPLETED = "world.retention.erasure_completed"
+    AUDIT_EXPORT_REQUESTED = "governance.audit_export.requested"
+    ONBOARDING_HANDOFF_CREATED = "world.onboarding_handoff.created"
+    ONBOARDING_HANDOFF_UPDATED = "world.onboarding_handoff.updated"
     # Reflection
     REFLECTION_CREATED = "reflection.created"
 

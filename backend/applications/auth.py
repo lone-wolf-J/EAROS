@@ -1,12 +1,16 @@
-"""Emergent Google Auth — session cookie + Bearer fallback.
+"""EAROS authentication, tenancy assignment, and server-managed sessions.
 
-Implements /api/auth/session, /api/auth/me, /api/auth/logout.
-Also assigns a role & organization to first-time users (defaults to recruiter@LevelShift).
+This module is deliberately conservative: identity is verified by the configured
+upstream session service, tenant and role assignments are explicit, and only
+hashes of EAROS session tokens are persisted.
 """
 from __future__ import annotations
 
+import logging
 import os
+import secrets
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 from typing import Optional
 
 import httpx
@@ -16,249 +20,167 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from foundation import Role, new_user_id, utcnow_iso
 
-AUTH_SESSION_DATA_URL = (
-    "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
+SESSION_TTL_DAYS = int(os.getenv("EAROS_SESSION_TTL_DAYS", "7"))
+AUTH_SESSION_DATA_URL = os.getenv(
+    "AUTH_SESSION_DATA_URL",
+    "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
 )
-SESSION_TTL_DAYS = 7
+LOG = logging.getLogger("earos.auth")
+VALID_ROLES = {item.value for item in Role}
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _session_digest(token: str) -> str:
+    return sha256(token.encode("utf-8")).hexdigest()
+
+
+def _cookie_settings() -> dict[str, object]:
+    same_site = os.getenv("EAROS_COOKIE_SAMESITE", "lax").strip().lower()
+    if same_site not in {"lax", "strict", "none"}:
+        raise RuntimeError("EAROS_COOKIE_SAMESITE must be lax, strict, or none")
+    if same_site == "none" and not _env_flag("EAROS_COOKIE_SECURE", True):
+        raise RuntimeError("SameSite=None requires EAROS_COOKIE_SECURE=true")
+    return {
+        "path": "/",
+        "httponly": True,
+        "secure": _env_flag("EAROS_COOKIE_SECURE", True),
+        "samesite": same_site,
+        "max_age": SESSION_TTL_DAYS * 24 * 60 * 60,
+    }
+
+
+def _parse_expiry(value: str | datetime) -> datetime:
+    expiry = datetime.fromisoformat(value) if isinstance(value, str) else value
+    return expiry.replace(tzinfo=timezone.utc) if expiry.tzinfo is None else expiry
 
 
 class AppUser(BaseModel):
     model_config = ConfigDict(extra="ignore")
+
     user_id: str
     email: str
     name: str
     picture: Optional[str] = None
     role: str = Role.RECRUITER.value
-    organization_id: str = "org_levelshift"
+    organization_id: str
     created_at: str = Field(default_factory=utcnow_iso)
+
+
+async def _read_session_user(db: AsyncIOMotorDatabase, token: str) -> Optional[AppUser]:
+    session = await db.user_sessions.find_one({"session_token_hash": _session_digest(token)}, {"_id": 0})
+    if not session or _parse_expiry(session["expires_at"]) <= datetime.now(timezone.utc):
+        return None
+    user_doc = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
+    return AppUser(**user_doc) if user_doc else None
+
+
+async def _create_session(db: AsyncIOMotorDatabase, user: AppUser, request: Request) -> str:
+    token = secrets.token_urlsafe(48)
+    await db.user_sessions.insert_one({
+        "user_id": user.user_id,
+        "organization_id": user.organization_id,
+        "session_token_hash": _session_digest(token),
+        "expires_at": (datetime.now(timezone.utc) + timedelta(days=SESSION_TTL_DAYS)).isoformat(),
+        "created_at": utcnow_iso(),
+        "user_agent": request.headers.get("user-agent", "")[:512],
+    })
+    return token
+
+
+async def _provision_or_update_user(db: AsyncIOMotorDatabase, identity: dict) -> AppUser:
+    email = str(identity["email"]).strip().lower()
+    existing = await db.users.find_one({"email": email}, {"_id": 0})
+    if existing:
+        await db.users.update_one(
+            {"email": email},
+            {"$set": {"name": identity.get("name") or existing.get("name", email), "picture": identity.get("picture") or existing.get("picture")}},
+        )
+        return AppUser(**{**existing, "name": identity.get("name") or existing.get("name", email), "picture": identity.get("picture") or existing.get("picture")})
+
+    if not _env_flag("EAROS_ALLOW_JIT_PROVISIONING", False):
+        raise HTTPException(status_code=403, detail="User provisioning is disabled. Ask an EAROS administrator for access.")
+    organization_id = identity.get("organization_id") or identity.get("organizationId") or os.getenv("EAROS_DEFAULT_ORGANIZATION_ID")
+    if not organization_id:
+        raise HTTPException(status_code=422, detail="Authenticated identity is missing an organization assignment.")
+    role = str(identity.get("role", Role.RECRUITER.value))
+    if role not in VALID_ROLES:
+        role = Role.RECRUITER.value
+    user = AppUser(user_id=new_user_id(), email=email, name=identity.get("name") or email, picture=identity.get("picture"), role=role, organization_id=str(organization_id))
+    await db.users.insert_one(user.model_dump())
+    await db.audit_events.insert_one({"event_type": "identity.user_provisioned", "organization_id": user.organization_id, "actor_user_id": user.user_id, "created_at": utcnow_iso(), "metadata": {"role": user.role}})
+    return user
 
 
 def build_router(db: AsyncIOMotorDatabase) -> APIRouter:
     router = APIRouter(prefix="/api/auth", tags=["auth"])
 
-    async def _resolve_role(email: str) -> str:
-        email_l = email.lower()
-        if any(x in email_l for x in ("exec", "ceo", "cfo", "cpo", "chro")):
-            return Role.EXECUTIVE.value
-        if any(x in email_l for x in ("manager", "director", "vp", "head", "lead")):
-            return Role.HIRING_MANAGER.value
-        if "candidate" in email_l:
-            return Role.CANDIDATE.value
-        return Role.RECRUITER.value
-
-    async def _upsert_user(payload: dict) -> AppUser:
-        email = payload["email"]
-        existing = await db.users.find_one({"email": email}, {"_id": 0})
-        if existing:
-            # keep the same user_id, refresh profile
-            await db.users.update_one(
-                {"email": email},
-                {"$set": {
-                    "name": payload.get("name", existing.get("name", "")),
-                    "picture": payload.get("picture", existing.get("picture")),
-                }},
-            )
-            return AppUser(**{**existing, "name": payload.get("name", existing.get("name", "")),
-                              "picture": payload.get("picture", existing.get("picture"))})
-        role = await _resolve_role(email)
-        user = AppUser(
-            user_id=new_user_id(),
-            email=email,
-            name=payload.get("name", email),
-            picture=payload.get("picture"),
-            role=role,
-            organization_id="org_levelshift",
-        )
-        await db.users.insert_one(user.model_dump())
-        return user
-
-    async def _current_user_from_token(session_token: str) -> Optional[AppUser]:
-        session = await db.user_sessions.find_one(
-            {"session_token": session_token}, {"_id": 0}
-        )
-        if not session:
-            return None
-        expires_at = session["expires_at"]
-        if isinstance(expires_at, str):
-            expires_at = datetime.fromisoformat(expires_at)
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
-        if expires_at < datetime.now(timezone.utc):
-            return None
-        user_doc = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
-        return AppUser(**user_doc) if user_doc else None
-
     @router.post("/session")
-    async def create_session(
-        response: Response,
-        x_session_id: str = Header(..., alias="X-Session-ID"),
-    ):
-        """Exchange Emergent session_id for a persistent session_token cookie."""
-        import logging
-        log = logging.getLogger("earos.auth")
+    async def create_session(request: Request, response: Response, x_session_id: str = Header(..., alias="X-Session-ID")):
+        """Exchange a validated upstream session for an EAROS-only secure cookie."""
+        if len(x_session_id.strip()) < 8:
+            raise HTTPException(status_code=401, detail="Invalid upstream session identifier")
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.get(
-                    AUTH_SESSION_DATA_URL,
-                    headers={"X-Session-ID": x_session_id},
-                )
-        except Exception as e:  # noqa: BLE001
-            log.exception("Emergent auth backend unreachable: %s", e)
-            raise HTTPException(
-                status_code=502,
-                detail=f"Emergent auth backend unreachable: {e.__class__.__name__}",
-            )
-        if resp.status_code != 200:
-            log.warning(
-                "Emergent session-data returned %s: %s",
-                resp.status_code, resp.text[:200],
-            )
-            raise HTTPException(
-                status_code=401,
-                detail=f"Emergent session invalid ({resp.status_code})",
-            )
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
+                upstream = await client.get(AUTH_SESSION_DATA_URL, headers={"X-Session-ID": x_session_id})
+        except httpx.HTTPError as exc:
+            LOG.exception("Configured identity service was unavailable")
+            raise HTTPException(status_code=502, detail="Configured identity service is unavailable") from exc
+        if upstream.status_code != 200:
+            LOG.warning("Identity service rejected a session: status=%s", upstream.status_code)
+            raise HTTPException(status_code=401, detail="Invalid authenticated session")
         try:
-            data = resp.json()
-        except Exception as e:  # noqa: BLE001
-            log.exception("Emergent session-data JSON parse failed")
-            raise HTTPException(
-                status_code=502,
-                detail=f"Emergent session-data malformed: {e.__class__.__name__}",
-            )
-        if not data.get("email"):
-            log.warning("Emergent session-data missing email: %s", str(data)[:200])
-            raise HTTPException(
-                status_code=422,
-                detail="Emergent session-data missing email",
-            )
-        user = await _upsert_user(data)
-        session_token = data.get("session_token") or f"tok_{os.urandom(24).hex()}"
-        expires_at = datetime.now(timezone.utc) + timedelta(days=SESSION_TTL_DAYS)
-        await db.user_sessions.insert_one({
-            "user_id": user.user_id,
-            "session_token": session_token,
-            "expires_at": expires_at.isoformat(),
-            "created_at": utcnow_iso(),
-        })
-        response.set_cookie(
-            key="session_token",
-            value=session_token,
-            path="/",
-            httponly=True,
-            secure=True,
-            samesite="none",
-            max_age=SESSION_TTL_DAYS * 24 * 60 * 60,
-        )
+            identity = upstream.json()
+        except ValueError as exc:
+            raise HTTPException(status_code=502, detail="Configured identity service returned malformed data") from exc
+        if not identity.get("email"):
+            raise HTTPException(status_code=422, detail="Authenticated identity is missing an email address")
+        user = await _provision_or_update_user(db, identity)
+        token = await _create_session(db, user, request)
+        response.set_cookie(key="session_token", value=token, **_cookie_settings())
         return {"ok": True, "user": user.model_dump()}
 
     @router.get("/me")
-    async def me(
-        session_token_cookie: Optional[str] = Cookie(default=None, alias="session_token"),
-        authorization: Optional[str] = Header(default=None),
-    ):
-        token = session_token_cookie
-        if not token and authorization and authorization.lower().startswith("bearer "):
-            token = authorization.split(None, 1)[1].strip()
+    async def me(session_token_cookie: Optional[str] = Cookie(default=None, alias="session_token"), authorization: Optional[str] = Header(default=None)):
+        token = session_token_cookie or (authorization.split(None, 1)[1].strip() if authorization and authorization.lower().startswith("bearer ") else None)
         if not token:
             raise HTTPException(status_code=401, detail="Not authenticated")
-        user = await _current_user_from_token(token)
+        user = await _read_session_user(db, token)
         if not user:
-            raise HTTPException(status_code=401, detail="Session expired")
+            raise HTTPException(status_code=401, detail="Session expired or invalid")
         return user.model_dump()
 
     @router.post("/logout")
-    async def logout(
-        response: Response,
-        session_token_cookie: Optional[str] = Cookie(default=None, alias="session_token"),
-    ):
+    async def logout(response: Response, session_token_cookie: Optional[str] = Cookie(default=None, alias="session_token")):
         if session_token_cookie:
-            await db.user_sessions.delete_one({"session_token": session_token_cookie})
+            await db.user_sessions.delete_one({"session_token_hash": _session_digest(session_token_cookie)})
         response.delete_cookie("session_token", path="/")
         return {"ok": True}
 
-    # Dev helper — get a bearer token for a demo user without going through Google.
-    # SELF-HEALING: for the known demo allowlist, auto-create the user on first call
-    # so fresh production deployments Just Work even if the seed hasn't run yet.
-    DEMO_ALLOWLIST = {
-        "demo.recruiter@levelshift.ai":  ("Ava Recruiter",   Role.RECRUITER.value),
-        "demo.manager@levelshift.ai":    ("Marcus Manager",  Role.HIRING_MANAGER.value),
-        "demo.executive@levelshift.ai":  ("Elena Executive", Role.EXECUTIVE.value),
-    }
-    DEMO_PICTURE = (
-        "https://images.unsplash.com/photo-1500648767791-00dcc994a43e"
-        "?crop=entropy&cs=srgb&fm=jpg&w=200"
-    )
-
-    @router.post("/dev-login")
-    async def dev_login(email: str, response: Response):
-        """Mint a session for a demo user. Auto-provisions from the allowlist."""
-        import logging
-        log = logging.getLogger("earos.auth")
-        user_doc = await db.users.find_one({"email": email}, {"_id": 0})
-        if not user_doc:
-            if email not in DEMO_ALLOWLIST:
-                log.warning("dev-login rejected — not in allowlist: %s", email)
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Demo user not provisioned for {email}",
-                )
-            name, role = DEMO_ALLOWLIST[email]
-            user_doc = {
-                "user_id": new_user_id(),
-                "email": email,
-                "name": name,
-                "picture": DEMO_PICTURE,
-                "role": role,
-                "organization_id": "org_levelshift",
-                "created_at": utcnow_iso(),
-            }
-            await db.users.insert_one(user_doc)
-            log.info("dev-login auto-provisioned demo user: %s (%s)", email, role)
-            user_doc.pop("_id", None)
-
-        session_token = f"dev_{os.urandom(24).hex()}"
-        expires_at = datetime.now(timezone.utc) + timedelta(days=SESSION_TTL_DAYS)
-        await db.user_sessions.insert_one({
-            "user_id": user_doc["user_id"],
-            "session_token": session_token,
-            "expires_at": expires_at.isoformat(),
-            "created_at": utcnow_iso(),
-        })
-        response.set_cookie(
-            key="session_token",
-            value=session_token,
-            path="/",
-            httponly=True,
-            secure=True,
-            samesite="none",
-            max_age=SESSION_TTL_DAYS * 24 * 60 * 60,
-        )
-        return {"ok": True, "user": user_doc, "session_token": session_token}
+    @router.post("/dev-login", include_in_schema=False)
+    async def dev_login(request: Request, response: Response, email: str):
+        """Development-only login. It is unreachable unless explicitly enabled."""
+        if not _env_flag("EAROS_ENABLE_DEV_LOGIN", False):
+            raise HTTPException(status_code=404, detail="Not found")
+        identity = {"email": email, "name": email, "organization_id": os.getenv("EAROS_DEFAULT_ORGANIZATION_ID"), "role": Role.RECRUITER.value}
+        user = await _provision_or_update_user(db, identity)
+        token = await _create_session(db, user, request)
+        response.set_cookie(key="session_token", value=token, **_cookie_settings())
+        return {"ok": True, "user": user.model_dump()}
 
     return router
 
 
-async def get_current_user(
-    request: Request, db: AsyncIOMotorDatabase
-) -> AppUser:
+async def get_current_user(request: Request, db: AsyncIOMotorDatabase) -> AppUser:
     token = request.cookies.get("session_token")
-    if not token:
-        auth = request.headers.get("authorization", "")
-        if auth.lower().startswith("bearer "):
-            token = auth.split(None, 1)[1].strip()
+    authorization = request.headers.get("authorization", "")
+    if not token and authorization.lower().startswith("bearer "):
+        token = authorization.split(None, 1)[1].strip()
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    session = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
-    if not session:
-        raise HTTPException(status_code=401, detail="Invalid session")
-    expires_at = session["expires_at"]
-    if isinstance(expires_at, str):
-        expires_at = datetime.fromisoformat(expires_at)
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at < datetime.now(timezone.utc):
-        raise HTTPException(status_code=401, detail="Session expired")
-    user_doc = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
-    if not user_doc:
-        raise HTTPException(status_code=401, detail="User not found")
-    return AppUser(**user_doc)
+    user = await _read_session_user(db, token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Session expired or invalid")
+    return user

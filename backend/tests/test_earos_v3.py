@@ -8,14 +8,11 @@ import os
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
-if not BASE_URL:
-    with open("/app/frontend/.env") as f:
-        for line in f:
-            if line.startswith("REACT_APP_BACKEND_URL="):
-                BASE_URL = line.split("=", 1)[1].strip().rstrip("/")
-
-assert BASE_URL, "REACT_APP_BACKEND_URL not set"
+BASE_URL = (os.environ.get("EAROS_TEST_BACKEND_URL") or os.environ.get("VITE_BACKEND_URL") or "").rstrip("/")
+pytestmark = pytest.mark.skipif(
+    not BASE_URL,
+    reason="Live EAROS API tests require EAROS_TEST_BACKEND_URL (or VITE_BACKEND_URL) and a seeded test environment.",
+)
 RECRUITER_EMAIL = "demo.recruiter@levelshift.ai"
 
 LANES = {"planner", "policy", "runtime", "capability", "world", "governance", "reflection"}

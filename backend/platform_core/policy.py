@@ -24,9 +24,18 @@ from foundation import (
 from platform_core.governance import Governance
 
 
+# These irreversible actions are never eligible for the normal default-allow
+# posture. Tenant policies may add constraints, but cannot remove this gate.
+MANDATORY_APPROVAL_CAPABILITIES = {
+    "cap.execute_retention_archive",
+    "cap.execute_retention_erasure",
+}
+
+
 class Policy(BaseModel):
     model_config = ConfigDict(extra="ignore")
     policy_id: str = Field(default_factory=new_policy_id)
+    organization_id: str
     name: str
     description: str
     scope: str  # capability_id or "*"
@@ -66,16 +75,16 @@ class PolicyEngine:
 
     async def upsert_policy(self, p: Policy) -> Policy:
         await self.db.policies.update_one(
-            {"policy_id": p.policy_id}, {"$set": p.model_dump()}, upsert=True
+            {"policy_id": p.policy_id, "organization_id": p.organization_id}, {"$set": p.model_dump()}, upsert=True
         )
         return p
 
-    async def list_policies(self) -> list[Policy]:
-        docs = await self.db.policies.find({}, {"_id": 0}).to_list(500)
+    async def list_policies(self, organization_id: str) -> list[Policy]:
+        docs = await self.db.policies.find({"organization_id": organization_id}, {"_id": 0}).to_list(500)
         return [Policy(**d) for d in docs]
 
-    async def get_policy(self, policy_id: str) -> Optional[Policy]:
-        doc = await self.db.policies.find_one({"policy_id": policy_id}, {"_id": 0})
+    async def get_policy(self, policy_id: str, organization_id: str) -> Optional[Policy]:
+        doc = await self.db.policies.find_one({"policy_id": policy_id, "organization_id": organization_id}, {"_id": 0})
         return Policy(**doc) if doc else None
 
     async def evaluate(self, ctx: PolicyContext) -> PolicyEvaluationResult:
@@ -83,7 +92,7 @@ class PolicyEngine:
 
         The default posture is ALLOW unless any policy DENIES or requires approval.
         """
-        policies = await self.list_policies()
+        policies = await self.list_policies(ctx.organization_id)
         refs: list[PolicyReference] = []
         deny_reasons: list[str] = []
         require_approval = False
@@ -137,6 +146,16 @@ class PolicyEngine:
             elif policy_decision == PolicyDecision.REQUIRE_APPROVAL:
                 require_approval = True
                 approval_reasons.extend(reason_bits)
+
+        if ctx.capability_id in MANDATORY_APPROVAL_CAPABILITIES:
+            require_approval = True
+            approval_reasons.append("mandatory administrator approval required for irreversible retention execution")
+            refs.append(PolicyReference(
+                policy_id="earos.baseline.retention_execution_approval.v1",
+                name="Mandatory retention execution approval",
+                decision=PolicyDecision.REQUIRE_APPROVAL,
+                reason="archive and erasure may only run after a separate administrator approval decision",
+            ))
 
         # Aggregate the per-policy decisions. Defaults keep static analyzers
         # (and any future refactor that shortens the if/elif/else) safe.

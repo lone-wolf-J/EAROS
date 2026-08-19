@@ -1,0 +1,29 @@
+name: Frontend build
+
+on:
+  pull_request:
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend-build.yml"
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend-build.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: frontend/yarn.lock
+      - run: corepack enable
+      - run: yarn install --frozen-lockfile --ignore-engines
+      - run: VITE_BACKEND_URL=https://api.example.invalid yarn build
