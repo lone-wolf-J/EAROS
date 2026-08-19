@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { COLLABORATION_GUARDRAILS, HIRING_DECISION_GUARDRAILS, TABS, formatDate } from "./ATSOperations";
-import { WORKFLOW_DEFINITIONS } from "./ATSAutonomy";
+import { AUTONOMY_GUARDRAILS, WORKFLOW_DEFINITIONS } from "./ATSAutonomy";
 import { CONTROL_PANELS, canManageEnterpriseControls } from "./EnterpriseControls";
 import { CAREER_SITE_GUARDRAILS } from "./CareerSite";
 import { CAREER_INTAKE_GUARDRAILS } from "@/components/CareerIntakeManager";
@@ -43,11 +43,23 @@ describe("ATS Operations route contract", () => {
 
   it("keeps autonomous ATS workflows bounded to reviewable, governed operations", () => {
     expect(WORKFLOW_DEFINITIONS.map((workflow) => workflow.capability)).toEqual([
+      "cap.source_requisition_prospects",
       "cap.match_requisition",
       "cap.score_application",
+      "cap.analyze_resume",
+      "cap.draft_outreach",
       "cap.prepare_interview",
       "cap.prepare_job_publication",
       "cap.triage_requisition",
+    ]);
+  });
+
+  it("keeps autonomous sourcing, resume review, and outreach within explicit consent, draft, and approval boundaries", () => {
+    expect(AUTONOMY_GUARDRAILS).toEqual([
+      "source_shortlists_require_active_recruiting_consent",
+      "resume_analysis_uses_existing_parsed_profiles_only",
+      "outreach_is_draft_only_and_never_provider_delivered",
+      "plans_remain_policy_gated_and_auditable",
     ]);
   });
 

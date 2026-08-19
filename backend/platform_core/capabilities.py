@@ -82,7 +82,7 @@ class CapabilityRegistry:
 async def cap_source_candidates(
     inputs: dict[str, Any], ctx: CapabilityContext
 ) -> CapabilityResult:
-    """Deterministic sourcing: filters world state for candidates matching a job."""
+    """Deterministic sourcing: limits a job search to active, consented prospects."""
     world: WorldState = ctx.world
     job_id = inputs["job_id"]
     limit = int(inputs.get("limit", 20))
@@ -90,11 +90,21 @@ async def cap_source_candidates(
     if not job:
         return CapabilityResult(ok=False, error=f"job {job_id} not found")
     candidates = await world.list_candidates(ctx.organization_id, job_id=job_id)
-    matches = [c for c in candidates if c.stage == PipelineStage.SOURCED][:limit]
+    matches = [
+        candidate
+        for candidate in candidates
+        if candidate.stage == PipelineStage.SOURCED
+        and candidate.archived_at is None
+        and candidate.erased_at is None
+        and await _has_active_recruiting_consent(world, ctx.organization_id, candidate.candidate_id)
+    ][:limit]
     return CapabilityResult(
         ok=True,
         output={"candidate_ids": [c.candidate_id for c in matches], "count": len(matches)},
-        facts=[f"sourced {len(matches)} candidates for {job.title}"],
+        facts=[
+            f"sourced {len(matches)} active prospects with recorded recruiting consent for {job.title}",
+            "sourcing is read-only and does not contact candidates or alter any recruiting record",
+        ],
     )
 
 
@@ -162,21 +172,27 @@ async def cap_draft_outreach(
     cand = await world.get_candidate_for_organization(ctx.organization_id, inputs["candidate_id"])
     if not cand:
         return CapabilityResult(ok=False, error="candidate not found")
+    if not await _has_active_recruiting_consent(world, ctx.organization_id, cand.candidate_id):
+        return CapabilityResult(ok=False, error="active recruiting consent is required before an outreach draft can be prepared")
     job = await world.get_job_for_organization(ctx.organization_id, cand.job_id)
     if not job:
         return CapabilityResult(ok=False, error="job not found")
-    subject = f"{job.title} @ LevelShift — a role we think fits your profile"
+    first_name = cand.full_name.split()[0] if cand.full_name.strip() else "there"
+    subject = f"{job.title} at EAROS customer team — a role aligned with your profile"
     body = (
-        f"Hi {cand.full_name.split()[0]},\n\n"
-        f"I'm reaching out from LevelShift about a {job.title} role in {job.location}. "
+        f"Hi {first_name},\n\n"
+        f"I'm reaching out about a {job.title} role in {job.location}. "
         f"Your background at {cand.current_company} and skills in "
         f"{', '.join(cand.skills[:3])} align closely with what the team is looking for.\n\n"
-        "Would you be open to a 20-minute intro chat this week?\n\nBest,\nLevelShift Talent"
+        "Would you be open to a 20-minute introductory conversation this week?\n\nBest,\nTalent team"
     )
     return CapabilityResult(
         ok=True,
-        output={"subject": subject, "body": body, "channel": "email"},
-        facts=["outreach draft generated from deterministic template"],
+        output={"candidate_id": cand.candidate_id, "subject": subject, "body": body, "channel": "email", "delivery_state": "draft_only"},
+        facts=[
+            "outreach draft generated from a deterministic template after consent verification",
+            "the capability creates no communication record and never sends a message",
+        ],
     )
 
 
@@ -265,6 +281,120 @@ async def _requisition_skills(
         if job:
             return requisition, job.required_skills
     return requisition, []
+
+
+async def _has_active_recruiting_consent(
+    world: WorldState, organization_id: str, candidate_id: str
+) -> bool:
+    """Require recorded, unexpired recruiting consent for recommendation-stage outreach or sourcing."""
+    consents = await world.list_candidate_consents(organization_id, candidate_id)
+    now = utcnow_iso()
+    for consent in consents:
+        status = getattr(consent.status, "value", consent.status)
+        if (
+            consent.purpose == "recruiting"
+            and status == "granted"
+            and (not consent.expires_at or consent.expires_at >= now)
+        ):
+            return True
+    return False
+
+
+async def cap_source_requisition_prospects(
+    inputs: dict[str, Any], ctx: CapabilityContext
+) -> CapabilityResult:
+    """Return a consent-aware, read-only prospect shortlist for a requisition without any outreach."""
+    world: WorldState = ctx.world
+    requisition_id = inputs["requisition_id"]
+    requisition, required_skills = await _requisition_skills(world, ctx.organization_id, requisition_id)
+    if not requisition:
+        return CapabilityResult(ok=False, error="requisition not found")
+    if not required_skills:
+        return CapabilityResult(ok=False, error="requisition has no required skills in its hiring plan")
+
+    required = {skill.strip().lower() for skill in required_skills if skill.strip()}
+    limit = min(max(int(inputs.get("limit", 20)), 1), 100)
+    prospects: list[dict[str, Any]] = []
+    for candidate in await world.list_candidates(ctx.organization_id):
+        if candidate.archived_at or candidate.erased_at:
+            continue
+        if not await _has_active_recruiting_consent(world, ctx.organization_id, candidate.candidate_id):
+            continue
+        candidate_skills = {skill.strip().lower() for skill in candidate.skills if skill.strip()}
+        matched_skills = sorted(required & candidate_skills)
+        if not matched_skills:
+            continue
+        coverage = len(matched_skills) / max(1, len(required))
+        score = round(0.8 * coverage + 0.2 * min(candidate.years_experience / 8.0, 1.0), 3)
+        prospects.append({
+            "candidate_id": candidate.candidate_id,
+            "score": score,
+            "matched_skills": matched_skills,
+            "skill_gaps": sorted(required - candidate_skills),
+        })
+    prospects.sort(key=lambda item: item["score"], reverse=True)
+    shortlist = prospects[:limit]
+    return CapabilityResult(
+        ok=True,
+        output={"requisition_id": requisition_id, "prospects": shortlist, "count": len(shortlist)},
+        facts=[
+            f"identified {len(shortlist)} in-tenant prospects with active recruiting consent",
+            "shortlisting is read-only; it does not contact, tag, or advance any candidate automatically",
+        ],
+    )
+
+
+async def cap_analyze_resume(
+    inputs: dict[str, Any], ctx: CapabilityContext
+) -> CapabilityResult:
+    """Summarize existing parsed resume evidence without re-parsing a file or changing the candidate record."""
+    world: WorldState = ctx.world
+    candidate_id = inputs["candidate_id"]
+    candidate = await world.get_candidate_for_organization(ctx.organization_id, candidate_id)
+    if not candidate:
+        return CapabilityResult(ok=False, error="candidate not found")
+    resumes = await world.list_resumes(ctx.organization_id, candidate_id)
+    requested_resume_id = inputs.get("resume_id")
+    resume = next((item for item in resumes if item.resume_id == requested_resume_id), None) if requested_resume_id else next((item for item in resumes if item.is_primary), resumes[0] if resumes else None)
+    if not resume:
+        return CapabilityResult(ok=False, error="candidate has no resume record")
+    if resume.parse_status != "parsed" or not resume.parsed_profile:
+        return CapabilityResult(ok=False, error="resume must be parsed before a structured analysis can be prepared")
+
+    profile = resume.parsed_profile
+    raw_skills = profile.get("skills", candidate.skills)
+    extracted_skills = sorted({str(skill).strip() for skill in raw_skills if str(skill).strip()})
+    experience = profile.get("experience", [])
+    education = profile.get("education", [])
+    strengths = [
+        f"Structured profile contains {len(extracted_skills)} extracted skills.",
+        f"Candidate record reports {candidate.years_experience:g} years of experience.",
+    ]
+    limitations = []
+    if not experience:
+        limitations.append("The parsed profile has no structured experience timeline; a recruiter should verify chronology against the original document.")
+    if not education:
+        limitations.append("The parsed profile has no structured education section; a recruiter should verify education claims if relevant to the role.")
+    if not extracted_skills:
+        limitations.append("No usable skills were extracted; resume parsing should be reviewed or retried before scoring.")
+    return CapabilityResult(
+        ok=True,
+        output={
+            "candidate_id": candidate.candidate_id,
+            "resume_id": resume.resume_id,
+            "parse_status": resume.parse_status,
+            "extracted_skills": extracted_skills,
+            "experience_entry_count": len(experience) if isinstance(experience, list) else 0,
+            "education_entry_count": len(education) if isinstance(education, list) else 0,
+            "strengths": strengths,
+            "limitations": limitations,
+            "requires_human_review": True,
+        },
+        facts=[
+            "analysis uses the existing parsed resume profile and canonical candidate record only",
+            "analysis is read-only and is distinct from parsing, fit scoring, candidate stage changes, and hiring decisions",
+        ],
+    )
 
 
 async def cap_match_requisition(
@@ -545,6 +675,30 @@ BUILTIN_CAPABILITIES: list[tuple[CapabilitySpec, CapabilityHandler]] = [
             permissions=["world.requisitions.read", "world.candidates.read"],
         ),
         cap_match_requisition,
+    ),
+    (
+        CapabilitySpec(
+            capability_id="cap.source_requisition_prospects",
+            name="Source Requisition Prospects",
+            description="Create a consent-aware in-tenant prospect shortlist without contacting or changing candidates.",
+            category="sourcing",
+            inputs={"requisition_id": "str", "limit": "int?"},
+            outputs={"prospects": "list[Prospect]", "count": "int"},
+            permissions=["world.requisitions.read", "world.candidates.read", "world.consents.read"],
+        ),
+        cap_source_requisition_prospects,
+    ),
+    (
+        CapabilitySpec(
+            capability_id="cap.analyze_resume",
+            name="Analyze Parsed Resume",
+            description="Summarize parsed resume evidence without parsing files, scoring fit, or mutating candidate data.",
+            category="screening",
+            inputs={"candidate_id": "str", "resume_id": "str?"},
+            outputs={"extracted_skills": "list[str]", "strengths": "list[str]", "limitations": "list[str]"},
+            permissions=["world.candidates.read", "world.resumes.read"],
+        ),
+        cap_analyze_resume,
     ),
     (
         CapabilitySpec(

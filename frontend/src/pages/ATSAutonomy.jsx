@@ -6,8 +6,11 @@ import {
   ChevronRight,
   ClipboardCheck,
   FileOutput,
+  FileText,
   ListChecks,
   Loader2,
+  Mail,
+  Search,
   Send,
   ShieldCheck,
   Sparkles,
@@ -19,6 +22,16 @@ import { api } from "@/lib/api";
 const fetcher = (url) => api.get(url).then((response) => response.data);
 
 export const WORKFLOW_DEFINITIONS = [
+  {
+    key: "source",
+    label: "Source consented prospects",
+    description: "Identify in-tenant prospects with active recruiting consent; the shortlist never sends contact or changes a candidate.",
+    icon: Search,
+    entity: "requisition",
+    goal: "Source consented prospects for this requisition",
+    capability: "cap.source_requisition_prospects",
+    tone: "text-emerald-200 border-emerald-500/30 bg-emerald-500/10",
+  },
   {
     key: "match",
     label: "Match prospects",
@@ -38,6 +51,26 @@ export const WORKFLOW_DEFINITIONS = [
     goal: "Score this application",
     capability: "cap.score_application",
     tone: "text-sky-200 border-sky-500/30 bg-sky-500/10",
+  },
+  {
+    key: "resume-analysis",
+    label: "Analyze parsed resume",
+    description: "Review stored parsed-resume evidence, strengths, and data gaps without re-parsing a file or changing a record.",
+    icon: FileText,
+    entity: "candidate",
+    goal: "Analyze this candidate's parsed resume",
+    capability: "cap.analyze_resume",
+    tone: "text-cyan-200 border-cyan-500/30 bg-cyan-500/10",
+  },
+  {
+    key: "outreach-draft",
+    label: "Draft consented outreach",
+    description: "Prepare a recruiter-reviewed email draft only when active recruiting consent is recorded; EAROS never sends it.",
+    icon: Mail,
+    entity: "candidate",
+    goal: "Draft outreach for this candidate",
+    capability: "cap.draft_outreach",
+    tone: "text-fuchsia-200 border-fuchsia-500/30 bg-fuchsia-500/10",
   },
   {
     key: "interview",
@@ -71,6 +104,13 @@ export const WORKFLOW_DEFINITIONS = [
   },
 ];
 
+export const AUTONOMY_GUARDRAILS = [
+  "source_shortlists_require_active_recruiting_consent",
+  "resume_analysis_uses_existing_parsed_profiles_only",
+  "outreach_is_draft_only_and_never_provider_delivered",
+  "plans_remain_policy_gated_and_auditable",
+];
+
 function Selector({ label, value, onChange, options, emptyLabel }) {
   return (
     <label className="block space-y-1.5">
@@ -92,12 +132,14 @@ export default function ATSAutonomy() {
   const [requisitionId, setRequisitionId] = useState("");
   const [applicationId, setApplicationId] = useState("");
   const [interviewId, setInterviewId] = useState("");
+  const [candidateId, setCandidateId] = useState("");
   const [plan, setPlan] = useState(null);
   const [execution, setExecution] = useState(null);
   const [error, setError] = useState("");
   const [planning, setPlanning] = useState(false);
   const [executing, setExecuting] = useState(false);
   const { data: requisitions = [] } = useSWR("/ats/requisitions", fetcher);
+  const { data: candidates = [] } = useSWR("/ats/candidates", fetcher);
   const { data: applications = [] } = useSWR("/ats/applications", fetcher);
   const { data: interviews = [] } = useSWR("/ats/interviews", fetcher);
   const { data: distributionAdapters = [] } = useSWR("/ats/job-distribution/adapters", fetcher);
@@ -107,8 +149,9 @@ export default function ATSAutonomy() {
   const context = useMemo(() => {
     if (workflow.entity === "application") return applicationId ? { application_id: applicationId } : {};
     if (workflow.entity === "interview") return interviewId ? { interview_id: interviewId } : {};
+    if (workflow.entity === "candidate") return candidateId ? { candidate_id: candidateId } : {};
     return requisitionId ? { requisition_id: requisitionId } : {};
-  }, [workflow.entity, requisitionId, applicationId, interviewId]);
+  }, [workflow.entity, requisitionId, applicationId, interviewId, candidateId]);
   const isReady = Object.keys(context).length === 1;
 
   const planWorkflow = async () => {
@@ -135,6 +178,7 @@ export default function ATSAutonomy() {
   };
 
   const requisitionOptions = requisitions.map((item) => ({ value: item.requisition_id, label: `${item.title} · ${item.approval_status}` }));
+  const candidateOptions = candidates.map((item) => ({ value: item.candidate_id, label: `${item.full_name} · ${item.current_title || "Candidate"}` }));
   const applicationOptions = applications.map((item) => ({ value: item.application_id, label: `${item.application_id} · ${item.current_stage_name}` }));
   const interviewOptions = interviews.map((item) => ({ value: item.interview_id, label: `${item.interview_type} · ${new Date(item.scheduled_at).toLocaleString()}` }));
 
@@ -158,6 +202,7 @@ export default function ATSAutonomy() {
                 <div className="font-mono2 text-[10px] tracking-widest text-slate-500">CONTEXT FOR {workflow.label.toUpperCase()}</div>
                 <div className="mt-3">
                   {workflow.entity === "requisition" && <Selector label="REQUISITION" value={requisitionId} onChange={setRequisitionId} options={requisitionOptions} emptyLabel="Choose a requisition" />}
+                  {workflow.entity === "candidate" && <Selector label="CANDIDATE" value={candidateId} onChange={setCandidateId} options={candidateOptions} emptyLabel="Choose a candidate" />}
                   {workflow.entity === "application" && <Selector label="APPLICATION" value={applicationId} onChange={setApplicationId} options={applicationOptions} emptyLabel="Choose an application" />}
                   {workflow.entity === "interview" && <Selector label="INTERVIEW" value={interviewId} onChange={setInterviewId} options={interviewOptions} emptyLabel="Choose a scheduled interview" />}
                 </div>

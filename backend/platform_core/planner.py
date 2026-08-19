@@ -57,6 +57,8 @@ Available capabilities (use ONLY these IDs):
 - cap.generate_offer(candidate_id, base_salary?, equity_units?, signing_bonus?)
 - cap.schedule_interview(candidate_id, stage?, interviewer?, slot?)
 - cap.match_requisition(requisition_id, limit?)
+- cap.source_requisition_prospects(requisition_id, limit?)
+- cap.analyze_resume(candidate_id, resume_id?)
 - cap.score_application(application_id)
 - cap.prepare_interview(interview_id)
 - cap.prepare_job_publication(requisition_id, boards?)
@@ -68,6 +70,8 @@ Principles:
 - Only propose offer generation when candidate is at 'onsite' or later.
 - Job publication capability creates a draft packet only; never claim an external board was published to.
 - Interview preparation and workflow triage are recommendations only; never infer or submit hiring feedback.
+- Resume analysis uses an already parsed profile only; it must not parse raw files, score an application, or alter a candidate.
+- Sourcing and outreach drafts require active recorded recruiting consent and never contact candidates directly.
 - If information is missing, propose the retrieval step first.
 """
 
@@ -209,7 +213,18 @@ class Planner:
         reasoning: list[dict[str, Any]] = []
 
         goal_low = goal.lower()
-        if "score" in goal_low and application_id:
+        if "resume" in goal_low and ("analysis" in goal_low or "analy" in goal_low) and candidate_id:
+            steps = [{
+                "capability_id": "cap.analyze_resume",
+                "inputs": {"candidate_id": candidate_id},
+                "description": "Summarize stored parsed-resume evidence for recruiter review.",
+                "confidence": 0.78,
+            }]
+            reasoning = [{
+                "step": 1, "thought": "Resume analysis is bounded to persisted parsed profile facts and does not mutate records.",
+                "conclusion": "Invoke cap.analyze_resume under policy control."
+            }]
+        elif "score" in goal_low and application_id:
             steps = [{
                 "capability_id": "cap.score_application",
                 "inputs": {"application_id": application_id},
@@ -230,6 +245,17 @@ class Planner:
             reasoning = [{
                 "step": 1, "thought": "Prospect matching can be a read-only deterministic comparison.",
                 "conclusion": "Invoke cap.match_requisition without altering candidate state."
+            }]
+        elif ("source" in goal_low or "prospect" in goal_low) and requisition_id:
+            steps = [{
+                "capability_id": "cap.source_requisition_prospects",
+                "inputs": {"requisition_id": requisition_id, "limit": 20},
+                "description": "Produce a consent-aware prospect shortlist for recruiter review.",
+                "confidence": 0.76,
+            }]
+            reasoning = [{
+                "step": 1, "thought": "Sourcing is limited to active in-tenant prospects with recorded recruiting consent.",
+                "conclusion": "Invoke cap.source_requisition_prospects without contacting or mutating candidates."
             }]
         elif "publication" in goal_low and requisition_id:
             steps = [{

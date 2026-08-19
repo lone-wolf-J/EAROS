@@ -6,39 +6,87 @@ import pytest
 from platform_core.capabilities import (
     CapabilityContext,
     build_default_registry,
+    cap_analyze_resume,
+    cap_draft_outreach,
     cap_match_requisition,
     cap_prepare_job_publication,
+    cap_source_requisition_prospects,
 )
 from platform_core.integrations import list_job_distribution_adapters
 from platform_core.governance import Governance
+from platform_core.planner import Planner
 from platform_core.policy import Policy, PolicyEngine
 from platform_core.runtime import ExecutionRecord, PlanStep, Runtime
-from foundation import DomainEvent, EventType, ExecutionStatus
+from foundation import ConsentStatus, DomainEvent, EventType, ExecutionStatus
 from foundation import RetentionCaseStatus
-from platform_core.world import Candidate, Requisition, RetentionCase
+from platform_core.world import Candidate, CandidateConsent, Job, Requisition, ResumeDocument, RetentionCase
 
 
 class FakeATSWorld:
     def __init__(self):
+        self.job = Job(
+            organization_id="org_alpha",
+            department_id="dept_engineering",
+            title="Platform Engineer",
+            level="IC4",
+            location="Remote",
+            country="USA",
+            salary_min=140000,
+            salary_max=180000,
+            currency="USD",
+            required_skills=["Python", "Kubernetes", "AWS"],
+            business_impact="Deliver the organization's core platform.",
+            hiring_manager="usr_manager",
+        )
         self.requisition = Requisition(
             organization_id="org_alpha",
             title="Platform Engineer",
+            job_id=self.job.job_id,
             hiring_plan={"required_skills": ["Python", "Kubernetes", "AWS"]},
         )
         self.candidates = [
             Candidate(
                 organization_id="org_alpha",
+                job_id=self.job.job_id,
                 full_name="Ada Lovelace",
                 skills=["Python", "Kubernetes", "AWS"],
                 years_experience=9,
             ),
             Candidate(
                 organization_id="org_alpha",
+                job_id=self.job.job_id,
                 full_name="Grace Hopper",
                 skills=["Python"],
                 years_experience=6,
             ),
         ]
+        self.consents = {
+            self.candidates[0].candidate_id: [CandidateConsent(
+                organization_id="org_alpha",
+                candidate_id=self.candidates[0].candidate_id,
+                purpose="recruiting",
+                status=ConsentStatus.GRANTED,
+            )],
+            self.candidates[1].candidate_id: [CandidateConsent(
+                organization_id="org_alpha",
+                candidate_id=self.candidates[1].candidate_id,
+                purpose="recruiting",
+                status=ConsentStatus.REVOKED,
+            )],
+        }
+        self.resumes = {
+            self.candidates[0].candidate_id: [ResumeDocument(
+                organization_id="org_alpha",
+                candidate_id=self.candidates[0].candidate_id,
+                file_name="ada-lovelace.pdf",
+                parse_status="parsed",
+                parsed_profile={
+                    "skills": ["Python", "Kubernetes", "AWS"],
+                    "experience": [{"title": "Principal Engineer", "company": "Analytical Engines"}],
+                    "education": [{"institution": "University of London"}],
+                },
+            )],
+        }
 
     async def get_requisition(self, organization_id, requisition_id):
         if organization_id == "org_alpha" and requisition_id == self.requisition.requisition_id:
@@ -46,10 +94,30 @@ class FakeATSWorld:
         return None
 
     async def get_job_for_organization(self, organization_id, job_id):
+        if organization_id == "org_alpha" and job_id == self.job.job_id:
+            return self.job
         return None
 
-    async def list_candidates(self, organization_id):
+    async def list_candidates(self, organization_id, **_):
         return self.candidates if organization_id == "org_alpha" else []
+
+    async def get_candidate_for_organization(self, organization_id, candidate_id):
+        if organization_id != "org_alpha":
+            return None
+        return next((candidate for candidate in self.candidates if candidate.candidate_id == candidate_id), None)
+
+    async def list_candidate_consents(self, organization_id, candidate_id):
+        if organization_id != "org_alpha":
+            return []
+        return self.consents.get(candidate_id, [])
+
+    async def list_resumes(self, organization_id, candidate_id):
+        if organization_id != "org_alpha":
+            return []
+        return self.resumes.get(candidate_id, [])
+
+    async def list_applications(self, organization_id, requisition_id=None):
+        return []
 
 
 class RetentionCapabilityWorld(FakeATSWorld):
@@ -174,11 +242,86 @@ def test_registry_exposes_governed_enterprise_ats_capabilities():
     ids = {spec.capability_id for spec in build_default_registry().list_specs()}
     assert {
         "cap.match_requisition",
+        "cap.source_requisition_prospects",
+        "cap.analyze_resume",
         "cap.score_application",
         "cap.prepare_interview",
         "cap.prepare_job_publication",
         "cap.triage_requisition",
     }.issubset(ids)
+
+
+def test_requisition_sourcing_is_tenant_scoped_consent_aware_and_read_only():
+    world = FakeATSWorld()
+    result = asyncio.run(
+        cap_source_requisition_prospects(
+            {"requisition_id": world.requisition.requisition_id, "limit": 10}, context(world)
+        )
+    )
+
+    assert result.ok is True
+    assert result.output["count"] == 1
+    assert result.output["prospects"][0]["candidate_id"] == world.candidates[0].candidate_id
+    assert "active recruiting consent" in result.facts[0]
+    assert "does not contact" in result.facts[1]
+
+
+def test_resume_analysis_uses_only_existing_parsed_evidence_and_does_not_mutate_candidate_state():
+    world = FakeATSWorld()
+    candidate = world.candidates[0]
+    original_stage = candidate.stage
+    original_skills = list(candidate.skills)
+
+    result = asyncio.run(cap_analyze_resume({"candidate_id": candidate.candidate_id}, context(world)))
+
+    assert result.ok is True
+    assert result.output["candidate_id"] == candidate.candidate_id
+    assert result.output["extracted_skills"] == ["AWS", "Kubernetes", "Python"]
+    assert result.output["requires_human_review"] is True
+    assert candidate.stage == original_stage
+    assert candidate.skills == original_skills
+    assert "distinct from parsing" in result.facts[1]
+
+
+def test_outreach_draft_requires_recruiting_consent_and_never_sends_a_message():
+    world = FakeATSWorld()
+    candidate = world.candidates[0]
+
+    draft = asyncio.run(cap_draft_outreach({"candidate_id": candidate.candidate_id}, context(world)))
+    assert draft.ok is True
+    assert draft.output["delivery_state"] == "draft_only"
+    assert "never sends" in draft.facts[1]
+
+    world.consents[candidate.candidate_id][0].status = ConsentStatus.REVOKED
+    rejected = asyncio.run(cap_draft_outreach({"candidate_id": candidate.candidate_id}, context(world)))
+    assert rejected.ok is False
+    assert "active recruiting consent" in rejected.error
+
+
+def test_deterministic_planner_routes_new_autonomy_goals_to_registered_governed_capabilities():
+    world = FakeATSWorld()
+    planner = Planner(world, build_default_registry())
+    planner.llm_key = ""
+
+    sourcing_plan = asyncio.run(planner.plan(
+        "Source consented prospects for this requisition",
+        "org_alpha",
+        {"requisition_id": world.requisition.requisition_id},
+    ))
+    resume_plan = asyncio.run(planner.plan(
+        "Analyze this candidate's parsed resume",
+        "org_alpha",
+        {"candidate_id": world.candidates[0].candidate_id},
+    ))
+    outreach_plan = asyncio.run(planner.plan(
+        "Draft outreach for this candidate",
+        "org_alpha",
+        {"candidate_id": world.candidates[0].candidate_id},
+    ))
+
+    assert [step.capability_id for step in sourcing_plan.steps] == ["cap.source_requisition_prospects"]
+    assert [step.capability_id for step in resume_plan.steps] == ["cap.analyze_resume"]
+    assert [step.capability_id for step in outreach_plan.steps] == ["cap.draft_outreach"]
 
 
 def test_matching_is_tenant_scoped_ranked_and_read_only():
@@ -302,6 +445,9 @@ def test_matching_can_be_escalated_to_the_same_human_approval_queue_by_tenant_po
     ("capability_id", "inputs"),
     [
         ("cap.score_application", {"application_id": "app_policy_only"}),
+        ("cap.source_requisition_prospects", {"requisition_id": "req_policy_only"}),
+        ("cap.analyze_resume", {"candidate_id": "cand_policy_only"}),
+        ("cap.draft_outreach", {"candidate_id": "cand_policy_only"}),
         ("cap.prepare_interview", {"interview_id": "int_policy_only"}),
         ("cap.triage_requisition", {"requisition_id": "req_policy_only"}),
     ],
