@@ -189,6 +189,59 @@ def test_duplicate_lookup_normalizes_identity_and_never_queries_across_tenants()
     assert cross_tenant_match is None
 
 
+def test_candidate_crm_search_filters_within_tenant_by_query_tag_source_and_fit_score():
+    matching = _candidate(
+        "org_a",
+        full_name="Grace Hopper",
+        source="referral",
+        source_detail="engineering network",
+        tags=["Priority", "Platform"],
+        skills=["Python", "Compilers"],
+        fit_score=0.91,
+    )
+    low_fit = _candidate(
+        "org_a", full_name="Grace Low", source="referral", tags=["Priority"], fit_score=0.4
+    )
+    other_tenant = _candidate(
+        "org_b", full_name="Grace Hopper", source="referral", tags=["Priority"], fit_score=0.99
+    )
+    world = WorldState(_FakeDatabase([
+        matching.model_dump(), low_fit.model_dump(), other_tenant.model_dump()
+    ]))
+
+    results = asyncio.run(world.search_candidates(
+        "org_a", query="grace compilers", tags=["priority"], source="referral", minimum_fit_score=0.8
+    ))
+
+    assert [candidate.candidate_id for candidate in results] == [matching.candidate_id]
+
+
+def test_candidate_crm_update_scopes_source_tags_and_archive_mutations_to_active_tenant():
+    candidate_a = _candidate("org_a", tags=["Existing"], source="manual")
+    candidate_b = _candidate("org_b", tags=["Other"], source="agency")
+    database = _RetentionDatabase([candidate_a.model_dump(), candidate_b.model_dump()], [], [])
+    world = WorldState(database)
+
+    updated = asyncio.run(world.update_candidate_crm(
+        "org_a",
+        candidate_a.candidate_id,
+        tags=["Existing", "Priority", "Priority"],
+        source="referral",
+        source_detail="employee referral",
+        archived_at="2026-08-19T12:00:00+00:00",
+    ))
+    wrong_tenant = asyncio.run(world.update_candidate_crm(
+        "org_a", candidate_b.candidate_id, source="manual"
+    ))
+
+    assert updated and updated.tags == ["Existing", "Priority"]
+    assert updated.source == "referral"
+    assert updated.source_detail == "employee referral"
+    assert updated.archived_at == "2026-08-19T12:00:00+00:00"
+    assert wrong_tenant is None
+    assert database.candidates.docs[1]["source"] == "agency"
+
+
 def test_onboarding_handoff_is_tenant_scoped_and_carries_only_routing_metadata():
     handoff_a = OnboardingHandoff(
         organization_id="org_a",

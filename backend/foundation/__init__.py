@@ -25,6 +25,7 @@ def new_team_id() -> str: return _new_id("team")
 def new_job_id() -> str: return _new_id("job")
 def new_requisition_id() -> str: return _new_id("req")
 def new_candidate_id() -> str: return _new_id("cand")
+def new_candidate_tag_id() -> str: return _new_id("ctag")
 def new_application_id() -> str: return _new_id("app")
 def new_pipeline_id() -> str: return _new_id("pipe")
 def new_pipeline_stage_id() -> str: return _new_id("stage")
@@ -52,6 +53,7 @@ def new_reflection_id() -> str: return _new_id("refl")
 def new_retention_case_id() -> str: return _new_id("ret")
 def new_audit_export_id() -> str: return _new_id("auditexp")
 def new_onboarding_handoff_id() -> str: return _new_id("handoff")
+def new_notification_preference_id() -> str: return _new_id("notifpref")
 
 
 def utcnow() -> datetime:
@@ -198,12 +200,16 @@ class EventType(str, Enum):
     CANDIDATE_STAGE_CHANGED = "world.candidate.stage_changed"
     CANDIDATE_CREATED = "world.candidate.created"
     CANDIDATE_DEDUPLICATED = "world.candidate.deduplicated"
+    CANDIDATE_CRM_UPDATED = "world.candidate.crm_updated"
+    CANDIDATE_BULK_UPDATED = "world.candidate.bulk_updated"
     APPLICATION_CREATED = "world.application.created"
     APPLICATION_STAGE_CHANGED = "world.application.stage_changed"
     REQUISITION_CREATED = "world.requisition.created"
+    REQUISITION_PUBLICATION_UPDATED = "world.requisition.publication_updated"
     INTERVIEW_SCHEDULED = "world.interview.scheduled"
     SCORECARD_SUBMITTED = "world.scorecard.submitted"
     CONSENT_RECORDED = "world.consent.recorded"
+    NOTIFICATION_PREFERENCE_UPDATED = "world.notification_preference.updated"
     OFFER_EXTENDED = "world.offer.extended"
     JOB_CREATED = "world.job.created"
     RETENTION_CASE_REQUESTED = "world.retention_case.requested"

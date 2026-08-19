@@ -16,7 +16,7 @@ from platform_core.capabilities import build_default_registry
 from platform_core.governance import Governance
 from platform_core.policy import PolicyEngine
 from platform_core.runtime import Runtime
-from platform_core.world import AuditExportManifest, Candidate, RetentionCase
+from platform_core.world import AuditExportManifest, Candidate, Requisition, RetentionCase
 from test_governed_ats_capabilities import MemoryDB
 
 
@@ -515,3 +515,126 @@ def test_onboarding_handoff_handler_rejects_nonaccepted_offers(monkeypatch):
         asyncio.run(server.create_ats_onboarding_handoff(request, user))
     assert exc.value.status_code == 400
     assert "accepted offer" in exc.value.detail
+
+
+def test_interview_feedback_handler_scopes_the_interview_and_records_candidate_activity(monkeypatch):
+    calls = []
+
+    class _World:
+        async def get_interview(self, organization_id, interview_id):
+            calls.append(("interview", organization_id, interview_id))
+            return SimpleNamespace(candidate_id="cand_alpha")
+
+        async def get_scorecard(self, organization_id, scorecard_id):
+            calls.append(("scorecard", organization_id, scorecard_id))
+            return SimpleNamespace(scorecard_id=scorecard_id)
+
+        async def upsert_interview_feedback(self, feedback):
+            calls.append(("feedback", feedback.organization_id, feedback.interviewer_id, feedback.recommendation))
+            return feedback
+
+        async def record_activity(self, activity):
+            calls.append(("activity", activity.organization_id, activity.entity_type, activity.entity_id, activity.event_type))
+            return activity
+
+    class _Governance:
+        async def emit(self, event):
+            calls.append(("event", event.organization_id, event.event_type.value, event.subject_id))
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    user = SimpleNamespace(user_id="manager_alpha", organization_id="org_alpha", role=Role.HIRING_MANAGER)
+    request = server.InterviewFeedbackCreateRequest(
+        scorecard_id="scorecard_alpha",
+        recommendation="yes",
+        ratings={"Role evidence": 4},
+        strengths=["Relevant operating experience"],
+        summary="Evidence-based hiring-manager feedback.",
+    )
+
+    result = asyncio.run(server.create_ats_interview_feedback("interview_alpha", request, user))
+
+    assert result["organization_id"] == "org_alpha"
+    assert result["interviewer_id"] == "manager_alpha"
+    assert ("interview", "org_alpha", "interview_alpha") in calls
+    assert ("scorecard", "org_alpha", "scorecard_alpha") in calls
+    assert ("feedback", "org_alpha", "manager_alpha", "yes") in calls
+    assert ("activity", "org_alpha", "candidate", "cand_alpha", "interview.feedback_submitted") in calls
+    assert ("event", "org_alpha", "world.scorecard.submitted", "interview_alpha") in calls
+
+
+def test_publication_state_is_tenant_scoped_and_never_externalizes_a_requisition(monkeypatch):
+    calls = []
+    requisition = Requisition(organization_id="org_alpha", title="Platform Engineer")
+
+    class _World:
+        async def get_requisition(self, organization_id, requisition_id):
+            calls.append(("get", organization_id, requisition_id))
+            return requisition if requisition_id == requisition.requisition_id else None
+
+        async def upsert_requisition(self, value):
+            calls.append(("upsert", value.organization_id, value.external_publication_status, value.external_publication_targets))
+            return value
+
+        async def record_activity(self, activity):
+            calls.append(("activity", activity.organization_id, activity.event_type))
+            return activity
+
+    class _Governance:
+        async def emit(self, event):
+            calls.append(("event", event.organization_id, event.event_type.value))
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    user = SimpleNamespace(user_id="recruiter_alpha", organization_id="org_alpha", role=Role.RECRUITER)
+    request = server.RequisitionPublicationUpdateRequest(
+        internal_publication_status="published",
+        external_publication_status="pending_approval",
+        external_publication_targets=["indeed", "linkedin"],
+        career_site_enabled=True,
+        referral_intake_enabled=True,
+    )
+
+    result = asyncio.run(server.update_ats_requisition_publication(requisition.requisition_id, request, user))
+
+    assert result["internal_publication_status"] == "published"
+    assert result["external_publication_status"] == "pending_approval"
+    assert result["external_publication_targets"] == ["indeed", "linkedin"]
+    assert ("upsert", "org_alpha", "pending_approval", ["indeed", "linkedin"]) in calls
+    assert ("activity", "org_alpha", "requisition.publication_updated") in calls
+    assert ("event", "org_alpha", "world.requisition.publication_updated") in calls
+
+
+def test_notification_preferences_are_personal_tenant_scoped_records_with_inactive_provider_delivery(monkeypatch):
+    calls = []
+
+    class _World:
+        async def get_notification_preference(self, organization_id, user_id):
+            calls.append(("get", organization_id, user_id))
+            return None
+
+        async def upsert_notification_preference(self, preference):
+            calls.append(("upsert", preference.organization_id, preference.user_id, preference.email_enabled, preference.provider_delivery_state))
+            return preference
+
+        async def record_activity(self, activity):
+            calls.append(("activity", activity.organization_id, activity.entity_id, activity.event_type))
+            return activity
+
+    class _Governance:
+        async def emit(self, event):
+            calls.append(("event", event.organization_id, event.event_type.value))
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    user = SimpleNamespace(user_id="recruiter_alpha", organization_id="org_alpha", role=Role.RECRUITER)
+    request = server.NotificationPreferenceUpdateRequest(email_enabled=True, approval_alerts=False)
+
+    result = asyncio.run(server.update_ats_notification_preferences(request, user))
+
+    assert result["organization_id"] == "org_alpha"
+    assert result["user_id"] == "recruiter_alpha"
+    assert result["provider_delivery_state"] == "not_configured"
+    assert ("upsert", "org_alpha", "recruiter_alpha", True, "not_configured") in calls
+    assert ("activity", "org_alpha", "recruiter_alpha", "notification.preferences_updated") in calls
+    assert ("event", "org_alpha", "world.notification_preference.updated") in calls

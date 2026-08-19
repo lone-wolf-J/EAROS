@@ -7,9 +7,12 @@ describe("ATS Operations route contract", () => {
   it("keeps the enterprise records workbench focused on core ATS workstreams", () => {
     expect(TABS.map((tab) => tab.key)).toEqual([
       "requisitions",
+      "candidates",
       "applications",
       "pools",
       "interviews",
+      "collaboration",
+      "distribution",
       "handoffs",
     ]);
   });
@@ -33,6 +36,7 @@ describe("ATS Operations route contract", () => {
       "overview",
       "retention",
       "audit",
+      "notifications",
       "administration",
     ]);
   });

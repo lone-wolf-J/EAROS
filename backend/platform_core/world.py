@@ -28,11 +28,13 @@ from foundation import (
     new_activity_id,
     new_application_id,
     new_candidate_id,
+    new_candidate_tag_id,
     new_consent_id,
     new_department_id,
     new_feedback_id,
     new_interview_id,
     new_job_id,
+    new_notification_preference_id,
     new_offer_id,
     new_onboarding_handoff_id,
     new_organization_id,
@@ -167,10 +169,31 @@ class Requisition(BaseModel):
     hiring_plan: dict[str, Any] = Field(default_factory=dict)
     approval_status: RequisitionStatus = RequisitionStatus.DRAFT
     pipeline_id: Optional[str] = None
+    internal_publication_status: str = "draft"  # draft | published | closed
+    external_publication_status: str = "not_requested"  # not_requested | draft_ready | pending_approval
+    external_publication_targets: list[str] = Field(default_factory=list)
+    career_site_enabled: bool = False
+    referral_intake_enabled: bool = False
     created_by_user_id: Optional[str] = None
     created_at: str = Field(default_factory=utcnow_iso)
     updated_at: str = Field(default_factory=utcnow_iso)
     archived_at: Optional[str] = None
+
+
+class NotificationPreference(BaseModel):
+    """Per-user delivery choices. Provider delivery is never inferred from a preference."""
+    model_config = ConfigDict(extra="ignore")
+    notification_preference_id: str = Field(default_factory=new_notification_preference_id)
+    organization_id: str
+    user_id: str
+    in_app_enabled: bool = True
+    email_enabled: bool = False
+    interview_reminders: bool = True
+    approval_alerts: bool = True
+    candidate_activity_alerts: bool = True
+    provider_delivery_state: str = "not_configured"
+    created_at: str = Field(default_factory=utcnow_iso)
+    updated_at: str = Field(default_factory=utcnow_iso)
 
 
 class Candidate(BaseModel):
@@ -191,6 +214,7 @@ class Candidate(BaseModel):
     skills: list[str] = Field(default_factory=list)
     stage: PipelineStage = PipelineStage.SOURCED
     source: str = "sourced"  # sourced | applied | referral | agency
+    source_detail: Optional[str] = None
     fit_score: float = 0.0  # populated by intelligence
     risk_flags: list[str] = Field(default_factory=list)
     picture: Optional[str] = None
@@ -202,6 +226,19 @@ class Candidate(BaseModel):
     archived_at: Optional[str] = None
     erased_at: Optional[str] = None
     retention_case_id: Optional[str] = None
+
+
+class CandidateTag(BaseModel):
+    """Reusable, organization-scoped candidate label administered by recruiting."""
+    model_config = ConfigDict(extra="ignore")
+    candidate_tag_id: str = Field(default_factory=new_candidate_tag_id)
+    organization_id: str
+    name: str
+    normalized_name: str
+    color: str = "slate"
+    description: Optional[str] = None
+    created_by_user_id: Optional[str] = None
+    created_at: str = Field(default_factory=utcnow_iso)
 
 
 class Application(BaseModel):
@@ -560,6 +597,22 @@ class WorldState:
         docs = await self.db.requisitions.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
         return [Requisition(**doc) for doc in docs]
 
+    # personal notification delivery preferences
+    async def get_notification_preference(self, organization_id: str, user_id: str) -> Optional[NotificationPreference]:
+        doc = await self.db.notification_preferences.find_one(
+            {"organization_id": organization_id, "user_id": user_id}, {"_id": 0}
+        )
+        return NotificationPreference(**doc) if doc else None
+
+    async def upsert_notification_preference(self, preference: NotificationPreference) -> NotificationPreference:
+        preference.updated_at = utcnow_iso()
+        await self.db.notification_preferences.update_one(
+            {"organization_id": preference.organization_id, "user_id": preference.user_id},
+            {"$set": preference.model_dump()},
+            upsert=True,
+        )
+        return preference
+
     # candidates
     async def upsert_candidate(self, c: Candidate) -> Candidate:
         await self.db.candidates.update_one(
@@ -598,6 +651,85 @@ class WorldState:
             q["archived_at"] = None
         docs = await self.db.candidates.find(q, {"_id": 0}).to_list(2000)
         return [Candidate(**d) for d in docs]
+
+    async def search_candidates(
+        self,
+        organization_id: str,
+        *,
+        query: Optional[str] = None,
+        tags: Optional[list[str]] = None,
+        source: Optional[str] = None,
+        minimum_fit_score: Optional[float] = None,
+    ) -> list[Candidate]:
+        """Search active tenant candidates using bounded in-process matching for portability."""
+        candidates = await self.list_candidates(organization_id)
+        terms = [term.strip().lower() for term in (query or "").split() if term.strip()]
+        requested_tags = {tag.strip().lower() for tag in (tags or []) if tag.strip()}
+        source_value = (source or "").strip().lower()
+        result: list[Candidate] = []
+        for candidate in candidates:
+            haystack = " ".join([
+                candidate.full_name,
+                candidate.email or "",
+                candidate.location,
+                candidate.current_title,
+                candidate.current_company,
+                candidate.source,
+                candidate.source_detail or "",
+                " ".join(candidate.skills),
+                " ".join(candidate.tags),
+            ]).lower()
+            if terms and not all(term in haystack for term in terms):
+                continue
+            candidate_tags = {tag.lower() for tag in candidate.tags}
+            if requested_tags and not requested_tags.issubset(candidate_tags):
+                continue
+            if source_value and candidate.source.lower() != source_value:
+                continue
+            if minimum_fit_score is not None and candidate.fit_score < minimum_fit_score:
+                continue
+            result.append(candidate)
+        return result
+
+    async def upsert_candidate_tag(self, tag: CandidateTag) -> CandidateTag:
+        await self.db.candidate_tags.update_one(
+            {"organization_id": tag.organization_id, "normalized_name": tag.normalized_name},
+            {"$set": tag.model_dump()},
+            upsert=True,
+        )
+        return tag
+
+    async def list_candidate_tags(self, organization_id: str) -> list[CandidateTag]:
+        docs = await self.db.candidate_tags.find(
+            {"organization_id": organization_id}, {"_id": 0}
+        ).sort("name", 1).to_list(1000)
+        return [CandidateTag(**doc) for doc in docs]
+
+    async def update_candidate_crm(
+        self,
+        organization_id: str,
+        candidate_id: str,
+        *,
+        tags: Optional[list[str]] = None,
+        source: Optional[str] = None,
+        source_detail: Optional[str] = None,
+        archived_at: Optional[str] = None,
+    ) -> Optional[Candidate]:
+        updates: dict[str, Any] = {}
+        if tags is not None:
+            updates["tags"] = list(dict.fromkeys(tag.strip() for tag in tags if tag.strip()))
+        if source is not None:
+            updates["source"] = source
+        if source_detail is not None:
+            updates["source_detail"] = source_detail
+        if archived_at is not None:
+            updates["archived_at"] = archived_at
+        if not updates:
+            return await self.get_candidate_for_organization(organization_id, candidate_id)
+        await self.db.candidates.update_one(
+            {"organization_id": organization_id, "candidate_id": candidate_id}, {"$set": updates}
+        )
+        return await self.get_candidate_for_organization(organization_id, candidate_id)
 
     async def set_candidate_stage(self, candidate_id: str, stage: PipelineStage) -> None:
         await self.db.candidates.update_one(

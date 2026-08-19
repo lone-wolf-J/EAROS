@@ -91,9 +91,11 @@ from platform_core.world import (
     Application,
     AuditExportManifest,
     Candidate,
+    CandidateTag,
     CandidateConsent,
     Interview,
     InterviewFeedback,
+    NotificationPreference,
     OnboardingHandoff,
     Pipeline,
     PipelineStageDefinition,
@@ -428,6 +430,14 @@ class RequisitionCreateRequest(BaseModel):
     job_id: Optional[str] = None
 
 
+class RequisitionPublicationUpdateRequest(BaseModel):
+    internal_publication_status: Optional[str] = Field(default=None, pattern="^(draft|published|closed)$")
+    external_publication_status: Optional[str] = Field(default=None, pattern="^(not_requested|draft_ready|pending_approval)$")
+    external_publication_targets: Optional[list[str]] = Field(default=None, max_length=12)
+    career_site_enabled: Optional[bool] = None
+    referral_intake_enabled: Optional[bool] = None
+
+
 @app.get("/api/ats/requisitions")
 async def list_ats_requisitions(user: AppUser = Depends(_current_user)):
     return [requisition.model_dump() for requisition in await world.list_requisitions(user.organization_id)]
@@ -465,6 +475,43 @@ async def create_ats_requisition(req: RequisitionCreateRequest, user: AppUser = 
     return requisition.model_dump()
 
 
+@app.patch("/api/ats/requisitions/{requisition_id}/publication")
+async def update_ats_requisition_publication(
+    requisition_id: str, req: RequisitionPublicationUpdateRequest, user: AppUser = Depends(_current_user)
+):
+    """Persist recruiter-managed publication readiness; no external delivery occurs here."""
+    _require_role(user, Role.ADMIN, Role.RECRUITER)
+    requisition = await _scoped_requisition(requisition_id, user)
+    update = req.model_dump(exclude_none=True)
+    targets = update.get("external_publication_targets")
+    if targets is not None:
+        allowed = {adapter.provider for adapter in integration_job_distribution_adapters()}
+        invalid = sorted(set(targets) - allowed)
+        if invalid:
+            raise HTTPException(status_code=400, detail=f"Unsupported job-distribution provider: {invalid[0]}")
+        update["external_publication_targets"] = sorted(set(targets))
+    for field, value in update.items():
+        setattr(requisition, field, value)
+    requisition = await world.upsert_requisition(requisition)
+    await governance.emit(DomainEvent(
+        event_type=EventType.REQUISITION_PUBLICATION_UPDATED,
+        actor=f"user:{user.user_id}",
+        subject_type="requisition",
+        subject_id=requisition.requisition_id,
+        organization_id=user.organization_id,
+        payload={"internal_status": requisition.internal_publication_status, "external_status": requisition.external_publication_status, "targets": requisition.external_publication_targets},
+    ))
+    await world.record_activity(ActivityRecord(
+        organization_id=user.organization_id,
+        entity_type="requisition",
+        entity_id=requisition.requisition_id,
+        event_type="requisition.publication_updated",
+        actor_user_id=user.user_id,
+        payload={"internal_status": requisition.internal_publication_status, "external_status": requisition.external_publication_status, "target_count": len(requisition.external_publication_targets)},
+    ))
+    return requisition.model_dump()
+
+
 class CandidateCreateRequest(BaseModel):
     full_name: str = Field(min_length=2, max_length=200)
     email: Optional[str] = Field(default=None, max_length=320)
@@ -480,6 +527,7 @@ class CandidateCreateRequest(BaseModel):
     currency: str = Field(default="USD", min_length=3, max_length=3)
     skills: list[str] = Field(default_factory=list, max_length=250)
     source: str = Field(default="manual", max_length=80)
+    source_detail: Optional[str] = Field(default=None, max_length=500)
     tags: list[str] = Field(default_factory=list, max_length=100)
 
 
@@ -512,6 +560,123 @@ async def create_ats_candidate(req: CandidateCreateRequest, user: AppUser = Depe
         payload={"source": candidate.source},
     ))
     return candidate.model_dump()
+
+
+@app.get("/api/ats/candidates")
+async def search_ats_candidates(
+    q: Optional[str] = Query(default=None, max_length=300),
+    tag: list[str] = Query(default=[]),
+    source: Optional[str] = Query(default=None, max_length=80),
+    minimum_fit_score: Optional[float] = Query(default=None, ge=0, le=1),
+    user: AppUser = Depends(_current_user),
+):
+    candidates = await world.search_candidates(
+        user.organization_id,
+        query=q,
+        tags=tag,
+        source=source,
+        minimum_fit_score=minimum_fit_score,
+    )
+    return [candidate.model_dump() for candidate in candidates]
+
+
+class CandidateTagRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    color: str = Field(default="slate", max_length=40)
+    description: Optional[str] = Field(default=None, max_length=500)
+
+
+@app.get("/api/ats/candidate-tags")
+async def list_ats_candidate_tags(user: AppUser = Depends(_current_user)):
+    return [tag.model_dump() for tag in await world.list_candidate_tags(user.organization_id)]
+
+
+@app.post("/api/ats/candidate-tags")
+async def create_ats_candidate_tag(req: CandidateTagRequest, user: AppUser = Depends(_current_user)):
+    _require_role(user, Role.ADMIN, Role.RECRUITER)
+    name = " ".join(req.name.split())
+    tag = await world.upsert_candidate_tag(CandidateTag(
+        organization_id=user.organization_id,
+        name=name,
+        normalized_name=name.lower(),
+        color=req.color,
+        description=req.description,
+        created_by_user_id=user.user_id,
+    ))
+    return tag.model_dump()
+
+
+class CandidateBulkActionRequest(BaseModel):
+    candidate_ids: list[str] = Field(min_length=1, max_length=200)
+    action: str = Field(pattern="^(add_tags|remove_tags|set_source|add_to_talent_pool|archive)$")
+    tags: list[str] = Field(default_factory=list, max_length=100)
+    source: Optional[str] = Field(default=None, max_length=80)
+    source_detail: Optional[str] = Field(default=None, max_length=500)
+    talent_pool_id: Optional[str] = None
+    note: Optional[str] = Field(default=None, max_length=1000)
+
+
+@app.post("/api/ats/candidates/bulk")
+async def bulk_update_ats_candidates(req: CandidateBulkActionRequest, user: AppUser = Depends(_current_user)):
+    _require_role(user, Role.ADMIN, Role.RECRUITER)
+    candidate_ids = list(dict.fromkeys(req.candidate_ids))
+    candidates = [await _scoped_candidate(candidate_id, user) for candidate_id in candidate_ids]
+    if req.action in {"add_tags", "remove_tags"} and not req.tags:
+        raise HTTPException(status_code=400, detail="At least one tag is required")
+    if req.action == "set_source" and not req.source:
+        raise HTTPException(status_code=400, detail="A source is required")
+    if req.action == "add_to_talent_pool":
+        if not req.talent_pool_id:
+            raise HTTPException(status_code=400, detail="A talent pool is required")
+        pool_exists = any(pool.talent_pool_id == req.talent_pool_id for pool in await world.list_talent_pools(user.organization_id))
+        if not pool_exists:
+            raise HTTPException(status_code=404, detail="Talent pool not found")
+    updated: list[Candidate] = []
+    for candidate in candidates:
+        if req.action == "add_tags":
+            candidate = await world.update_candidate_crm(
+                user.organization_id, candidate.candidate_id, tags=[*candidate.tags, *req.tags]
+            )
+        elif req.action == "remove_tags":
+            remove_tags = {tag.lower() for tag in req.tags}
+            candidate = await world.update_candidate_crm(
+                user.organization_id, candidate.candidate_id,
+                tags=[tag for tag in candidate.tags if tag.lower() not in remove_tags],
+            )
+        elif req.action == "set_source":
+            candidate = await world.update_candidate_crm(
+                user.organization_id, candidate.candidate_id, source=req.source, source_detail=req.source_detail
+            )
+        elif req.action == "add_to_talent_pool":
+            await world.add_to_talent_pool(TalentPoolMembership(
+                organization_id=user.organization_id,
+                talent_pool_id=req.talent_pool_id,
+                candidate_id=candidate.candidate_id,
+                added_by_user_id=user.user_id,
+                note=req.note,
+            ))
+        elif req.action == "archive":
+            candidate = await world.update_candidate_crm(
+                user.organization_id, candidate.candidate_id, archived_at=utcnow_iso()
+            )
+        await world.record_activity(ActivityRecord(
+            organization_id=user.organization_id,
+            entity_type="candidate",
+            entity_id=candidate.candidate_id,
+            event_type="candidate.bulk_updated",
+            actor_user_id=user.user_id,
+            payload={"action": req.action, "tags": req.tags, "source": req.source, "talent_pool_id": req.talent_pool_id},
+        ))
+        await governance.emit(DomainEvent(
+            event_type=EventType.CANDIDATE_BULK_UPDATED,
+            actor=f"user:{user.user_id}",
+            subject_type="candidate",
+            subject_id=candidate.candidate_id,
+            organization_id=user.organization_id,
+            payload={"action": req.action},
+        ))
+        updated.append(candidate)
+    return {"updated_count": len(updated), "candidates": [candidate.model_dump() for candidate in updated]}
 
 
 class ApplicationCreateRequest(BaseModel):
@@ -793,6 +958,14 @@ async def create_ats_interview(req: InterviewCreateRequest, user: AppUser = Depe
         organization_id=user.organization_id,
         payload={"application_id": interview.application_id, "scheduled_at": interview.scheduled_at},
     ))
+    await world.record_activity(ActivityRecord(
+        organization_id=user.organization_id,
+        entity_type="candidate",
+        entity_id=interview.candidate_id,
+        event_type="interview.scheduled",
+        actor_user_id=user.user_id,
+        payload={"interview_id": interview.interview_id, "application_id": interview.application_id, "scheduled_at": interview.scheduled_at},
+    ))
     return interview.model_dump()
 
 
@@ -816,6 +989,14 @@ async def create_ats_scorecard(req: ScorecardCreateRequest, user: AppUser = Depe
         organization_id=user.organization_id,
         created_by_user_id=user.user_id,
         **req.model_dump(),
+    ))
+    await world.record_activity(ActivityRecord(
+        organization_id=user.organization_id,
+        entity_type="requisition" if scorecard.requisition_id else "scorecard",
+        entity_id=scorecard.requisition_id or scorecard.scorecard_id,
+        event_type="scorecard.created",
+        actor_user_id=user.user_id,
+        payload={"scorecard_id": scorecard.scorecard_id, "competency_count": len(scorecard.competencies)},
     ))
     return scorecard.model_dump()
 
@@ -841,7 +1022,8 @@ async def create_ats_interview_feedback(
     interview_id: str, req: InterviewFeedbackCreateRequest, user: AppUser = Depends(_current_user)
 ):
     _require_role(user, Role.ADMIN, Role.RECRUITER, Role.HIRING_MANAGER)
-    if not await world.get_interview(user.organization_id, interview_id):
+    interview = await world.get_interview(user.organization_id, interview_id)
+    if not interview:
         raise HTTPException(status_code=404, detail="Interview not found")
     if req.scorecard_id and not await world.get_scorecard(user.organization_id, req.scorecard_id):
         raise HTTPException(status_code=404, detail="Scorecard not found")
@@ -859,6 +1041,19 @@ async def create_ats_interview_feedback(
         subject_id=interview_id,
         organization_id=user.organization_id,
         payload={"feedback_id": feedback.feedback_id, "recommendation": feedback.recommendation},
+    ))
+    await world.record_activity(ActivityRecord(
+        organization_id=user.organization_id,
+        entity_type="candidate",
+        entity_id=interview.candidate_id,
+        event_type="interview.feedback_submitted",
+        actor_user_id=user.user_id,
+        payload={
+            "interview_id": interview_id,
+            "feedback_id": feedback.feedback_id,
+            "scorecard_id": feedback.scorecard_id,
+            "recommendation": feedback.recommendation,
+        },
     ))
     return feedback.model_dump()
 
@@ -1492,6 +1687,50 @@ async def integrations(user: AppUser = Depends(_current_user)):
 async def list_job_distribution_adapters(user: AppUser = Depends(_current_user)):
     """Expose provider capability and setup state without exposing connection secrets."""
     return [adapter.model_dump() for adapter in integration_job_distribution_adapters()]
+
+
+class NotificationPreferenceUpdateRequest(BaseModel):
+    in_app_enabled: bool = True
+    email_enabled: bool = False
+    interview_reminders: bool = True
+    approval_alerts: bool = True
+    candidate_activity_alerts: bool = True
+
+
+@app.get("/api/ats/notifications/preferences")
+async def get_ats_notification_preferences(user: AppUser = Depends(_current_user)):
+    preference = await world.get_notification_preference(user.organization_id, user.user_id)
+    if preference:
+        return preference.model_dump()
+    return NotificationPreference(organization_id=user.organization_id, user_id=user.user_id).model_dump()
+
+
+@app.put("/api/ats/notifications/preferences")
+async def update_ats_notification_preferences(
+    req: NotificationPreferenceUpdateRequest, user: AppUser = Depends(_current_user)
+):
+    existing = await world.get_notification_preference(user.organization_id, user.user_id)
+    preference = existing or NotificationPreference(organization_id=user.organization_id, user_id=user.user_id)
+    for field, value in req.model_dump().items():
+        setattr(preference, field, value)
+    preference = await world.upsert_notification_preference(preference)
+    await governance.emit(DomainEvent(
+        event_type=EventType.NOTIFICATION_PREFERENCE_UPDATED,
+        actor=f"user:{user.user_id}",
+        subject_type="notification_preference",
+        subject_id=preference.notification_preference_id,
+        organization_id=user.organization_id,
+        payload={"in_app_enabled": preference.in_app_enabled, "email_enabled": preference.email_enabled, "provider_delivery_state": preference.provider_delivery_state},
+    ))
+    await world.record_activity(ActivityRecord(
+        organization_id=user.organization_id,
+        entity_type="notification_preference",
+        entity_id=user.user_id,
+        event_type="notification.preferences_updated",
+        actor_user_id=user.user_id,
+        payload={"in_app_enabled": preference.in_app_enabled, "email_enabled": preference.email_enabled},
+    ))
+    return preference.model_dump()
 
 
 # ============================================================

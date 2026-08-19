@@ -15,6 +15,7 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: true,
     strictPort: true,
+    allowedHosts: [".manus.computer"],
   },
   esbuild: {
     loader: "jsx",

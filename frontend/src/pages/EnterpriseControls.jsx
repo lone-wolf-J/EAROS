@@ -3,6 +3,7 @@ import useSWR from "swr";
 import {
   ArchiveRestore,
   BarChart3,
+  Bell,
   CheckCircle2,
   Download,
   FileWarning,
@@ -17,7 +18,7 @@ import { useAuth } from "@/contexts/AuthContext";
 
 const fetcher = (path) => api.get(path).then((response) => response.data);
 
-export const CONTROL_PANELS = ["overview", "retention", "audit", "administration"];
+export const CONTROL_PANELS = ["overview", "retention", "audit", "notifications", "administration"];
 export const canManageEnterpriseControls = (user) => user?.role === "admin";
 
 const statusTone = (status) => ({
@@ -43,12 +44,14 @@ export default function EnterpriseControls() {
   const [creating, setCreating] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [executingCaseId, setExecutingCaseId] = useState("");
+  const [savingPreferences, setSavingPreferences] = useState(false);
   const [message, setMessage] = useState("");
   const [retentionForm, setRetentionForm] = useState({ subject_type: "candidate", subject_id: "", requested_action: "archive", reason: "", legal_hold: false });
   const { data: summary } = useSWR("/enterprise/operational-summary", fetcher);
   const { data: retentionCases = [], mutate: mutateRetention } = useSWR(isAdmin ? "/enterprise/retention-cases" : null, fetcher);
   const { data: exports = [], mutate: mutateExports } = useSWR(isAdmin ? "/enterprise/audit-exports" : null, fetcher);
   const { data: readiness } = useSWR(isAdmin ? "/enterprise/administration/readiness" : null, fetcher);
+  const { data: notificationPreferences, mutate: mutateNotificationPreferences } = useSWR("/ats/notifications/preferences", fetcher);
   const pendingCases = useMemo(() => retentionCases.filter((item) => item.status === "pending_review").length, [retentionCases]);
 
   const requestExport = async () => {
@@ -95,6 +98,17 @@ export default function EnterpriseControls() {
     finally { setExecutingCaseId(""); }
   };
 
+  const saveNotificationPreferences = async (updates) => {
+    if (!notificationPreferences) return;
+    setSavingPreferences(true); setMessage("");
+    try {
+      await api.put("/ats/notifications/preferences", { in_app_enabled: notificationPreferences.in_app_enabled, email_enabled: notificationPreferences.email_enabled, interview_reminders: notificationPreferences.interview_reminders, approval_alerts: notificationPreferences.approval_alerts, candidate_activity_alerts: notificationPreferences.candidate_activity_alerts, ...updates });
+      await mutateNotificationPreferences();
+      setMessage("Your notification preferences were saved to the tenant-scoped audit trail.");
+    } catch (error) { setMessage(error.response?.data?.detail || "Unable to save notification preferences."); }
+    finally { setSavingPreferences(false); }
+  };
+
   return <AppLayout>
     <div className="min-h-full bg-[radial-gradient(circle_at_88%_0%,rgba(45,212,191,.10),transparent_34%),radial-gradient(circle_at_2%_15%,rgba(124,58,237,.12),transparent_30%),#020617] px-5 py-6 md:px-8">
       <div className="mx-auto max-w-7xl">
@@ -109,6 +123,7 @@ export default function EnterpriseControls() {
         {activePanel === "audit" && <section className="grid gap-5 xl:grid-cols-[.8fr_1.2fr]"><div className="rounded-sm border border-slate-800 bg-slate-950/75 p-5"><div className="flex items-center gap-2"><Download className="h-4 w-4 text-teal-300" /><h2 className="font-display font-bold text-slate-100">Audit evidence export</h2></div><p className="mt-2 text-sm leading-6 text-slate-500">Exports contain the tenant-scoped immutable event stream available at request time. The JSON file is delivered to the authenticated administrator’s device and its manifest is retained for accountability.</p><button disabled={!isAdmin || exporting} onClick={requestExport} className="mt-5 inline-flex items-center gap-2 rounded-sm border border-teal-400/35 bg-teal-400/10 px-3 py-2.5 text-sm font-bold text-teal-100 disabled:cursor-not-allowed disabled:opacity-40"><Download className="h-4 w-4" />{exporting ? "Preparing export…" : "Export audit evidence"}</button></div><div className="rounded-sm border border-slate-800 bg-slate-950/75 p-5"><h2 className="font-display font-bold text-slate-100">Export manifests</h2><div className="mt-4 space-y-2">{exports.length ? exports.map((item) => <div key={item.audit_export_id} className="flex items-center justify-between rounded-sm border border-slate-800 bg-slate-900/60 px-3 py-2.5"><div><div className="font-mono2 text-[10px] text-slate-400">{item.audit_export_id}</div><div className="mt-1 text-xs text-slate-600">{item.event_count} events · {new Date(item.created_at).toLocaleString()}</div></div><span className="font-mono2 text-[9px] tracking-wider text-teal-300">{item.status}</span></div>) : <div className="rounded-sm border border-dashed border-slate-800 px-4 py-8 text-center text-sm text-slate-600">No exports requested for this tenant.</div>}</div></div></section>}
         {activePanel === "administration" && <section className="grid gap-5 lg:grid-cols-2"><div className="rounded-sm border border-slate-800 bg-slate-950/75 p-5"><div className="flex items-center gap-2"><UsersRound className="h-4 w-4 text-violet-300" /><h2 className="font-display font-bold text-slate-100">Role administration</h2></div><p className="mt-2 text-sm text-slate-500">Roles are evaluated at the API boundary for tenant-scoped operations.</p><div className="mt-4 grid grid-cols-2 gap-2">{readiness?.roles?.map((role) => <div key={role.id} className="rounded-sm border border-slate-800 bg-slate-900/60 px-3 py-2"><div className="text-sm text-slate-200">{role.label}</div><div className="mt-1 font-mono2 text-[9px] text-slate-600">{role.id}</div></div>)}</div></div><div className="rounded-sm border border-slate-800 bg-slate-950/75 p-5"><div className="flex items-center gap-2"><LockKeyhole className="h-4 w-4 text-teal-300" /><h2 className="font-display font-bold text-slate-100">SSO / SAML readiness</h2></div><div className="mt-4 rounded-sm border border-amber-400/25 bg-amber-400/10 p-3 font-mono2 text-[10px] tracking-wider text-amber-200">{readiness?.sso_saml?.status?.replaceAll("_", " ") || "ADMIN ACCESS REQUIRED"}</div><p className="mt-3 text-sm leading-6 text-slate-500">{readiness?.sso_saml?.secret_handling || "Identity-provider configuration is restricted to workspace administrators."}</p><div className="mt-4 flex flex-wrap gap-2">{readiness?.sso_saml?.required_configuration?.map((field) => <span key={field} className="rounded-sm border border-slate-800 px-2 py-1 font-mono2 text-[9px] text-slate-500">{field}</span>)}</div></div></section>}
       </div>
+      {activePanel === "notifications" && <section className="mx-auto mt-5 grid max-w-7xl gap-5 lg:grid-cols-[1.2fr_.8fr]"><div className="rounded-sm border border-slate-800 bg-slate-950/75 p-5"><div className="flex items-center gap-2"><Bell className="h-4 w-4 text-teal-300" /><h2 className="font-display font-bold text-slate-100">Personal notification preferences</h2></div><p className="mt-2 text-sm leading-6 text-slate-500">These choices are scoped to your EAROS workspace identity and generate an immutable preference-change event. They do not configure a provider or transmit candidate data.</p><div className="mt-5 space-y-2">{[["in_app_enabled", "In-app alerts", "Surface approved work, queue changes, and system notices in EAROS."], ["email_enabled", "Email delivery preference", "Saved as a preference only; no email provider is configured."], ["interview_reminders", "Interview reminders", "Receive future reminder events when delivery is configured."], ["approval_alerts", "Approval alerts", "Notify when governed work enters or leaves a review gate."], ["candidate_activity_alerts", "Candidate activity alerts", "Notify when tracked candidate activity is recorded."]].map(([field, label, detail]) => <label key={field} className="flex items-center justify-between gap-5 rounded-sm border border-slate-800 bg-slate-900/60 px-3 py-3"><span><span className="block text-sm font-semibold text-slate-200">{label}</span><span className="mt-1 block text-xs leading-5 text-slate-500">{detail}</span></span><input aria-label={label} type="checkbox" checked={Boolean(notificationPreferences?.[field])} disabled={!notificationPreferences || savingPreferences} onChange={(event) => saveNotificationPreferences({ [field]: event.target.checked })} className="h-4 w-4 shrink-0 accent-teal-400" /></label>)}</div></div><aside className="rounded-sm border border-amber-400/25 bg-amber-400/5 p-5"><div className="font-mono2 text-[10px] tracking-widest text-amber-200">DELIVERY STATUS</div><div className="mt-3 text-lg font-bold text-amber-100">{notificationPreferences?.provider_delivery_state || "loading"}</div><p className="mt-3 text-sm leading-6 text-amber-50/70">Email and outbound delivery are intentionally inactive until an administrator configures a compliant provider. EAROS retains your choices without claiming a notification has been sent.</p></aside></section>}
     </div>
   </AppLayout>;
 }
