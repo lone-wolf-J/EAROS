@@ -9,6 +9,8 @@ from pathlib import Path
 BACKEND = Path(__file__).resolve().parents[1]
 AUTH_SOURCE = (BACKEND / "applications" / "auth.py").read_text(encoding="utf-8")
 SERVER_SOURCE = (BACKEND / "server.py").read_text(encoding="utf-8")
+COMPOSE_SOURCE = (BACKEND.parent / "docker-compose.production.yml").read_text(encoding="utf-8")
+RUNBOOK_SOURCE = (BACKEND.parent / "docs" / "PRODUCTION_RUNBOOK.md").read_text(encoding="utf-8")
 
 
 def test_sessions_are_persisted_as_hashes_not_raw_tokens() -> None:
@@ -57,6 +59,46 @@ def test_readiness_and_request_correlation_are_present() -> None:
     assert '@app.get("/api/ready", include_in_schema=False)' in SERVER_SOURCE
     assert 'await db.command("ping")' in SERVER_SOURCE
     assert 'response.headers["X-Request-ID"] = request_id' in SERVER_SOURCE
+
+
+def test_operational_logs_are_structured_and_exclude_request_payloads() -> None:
+    assert "class StructuredJsonFormatter(logging.Formatter)" in SERVER_SOURCE
+    assert 'json.dumps(payload, separators=(",", ":"), default=str)' in SERVER_SOURCE
+    assert '"event": "request_completed"' in SERVER_SOURCE
+    assert '"event": "request_failed"' in SERVER_SOURCE
+    assert "request.body" not in SERVER_SOURCE
+
+
+def test_liveness_readiness_and_compose_startup_are_explicitly_separated() -> None:
+    assert '"kind": "liveness"' in SERVER_SOURCE
+    assert '"kind": "readiness"' in SERVER_SOURCE
+    assert "dockerfile: backend/Dockerfile" in COMPOSE_SOURCE
+    assert "condition: service_healthy" in COMPOSE_SOURCE
+    assert "/api/ready" in COMPOSE_SOURCE
+
+
+def test_operational_metrics_are_bounded_and_protected_by_a_dedicated_secret() -> None:
+    assert "class OperationalMetrics" in SERVER_SOURCE
+    assert '@app.get("/api/metrics", include_in_schema=False)' in SERVER_SOURCE
+    assert "EAROS_OPERATIONS_METRICS_TOKEN" in SERVER_SOURCE
+    assert "hmac.compare_digest(x_operations_token, configured_token)" in SERVER_SOURCE
+    assert '"status_classes": dict(sorted(self.status_classes.items()))' in SERVER_SOURCE
+    assert '"organization_id"' not in SERVER_SOURCE[SERVER_SOURCE.index("class OperationalMetrics"):SERVER_SOURCE.index("# ---------- MongoDB ----------")]
+
+
+def test_production_runbook_covers_deployment_backup_incident_and_go_live_controls() -> None:
+    for heading in (
+        "## Deployment procedure",
+        "## Post-deployment verification checklist",
+        "## Backup and restoration control",
+        "## Observability and incident response",
+        "## Go-live approval and rollback",
+        "## Deferred go-live dependencies",
+    ):
+        assert heading in RUNBOOK_SOURCE
+    assert "CORS_ORIGINS" in RUNBOOK_SOURCE
+    assert "X-Request-ID" in RUNBOOK_SOURCE
+    assert "draft-only" in RUNBOOK_SOURCE
 
 
 def test_policy_simulation_uses_the_authenticated_callers_role() -> None:

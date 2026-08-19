@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import json
 import logging
 import os
 import time
 import uuid
+from collections import Counter
 from pathlib import Path
 from typing import Any, Optional
 
@@ -116,11 +118,76 @@ from platform_core.world import (
 )
 from seed import seed_all
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
+class StructuredJsonFormatter(logging.Formatter):
+    """Emit machine-readable operational events without request bodies or credentials."""
+
+    _context_fields = ("event", "request_id", "method", "path", "status", "duration_ms", "error_type")
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict[str, Any] = {
+            "timestamp": utcnow_iso(),
+            "level": record.levelname,
+            "logger": record.name,
+            "event": getattr(record, "event", record.getMessage()),
+        }
+        for field in self._context_fields:
+            value = getattr(record, field, None)
+            if value is not None:
+                payload[field] = value
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
+        return json.dumps(payload, separators=(",", ":"), default=str)
+
+
+def _configure_operational_logging() -> None:
+    """Configure one JSON stream for log aggregation, avoiding sensitive request content."""
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(StructuredJsonFormatter())
+    root_logger.addHandler(stream_handler)
+    root_logger.setLevel(os.getenv("EAROS_LOG_LEVEL", "INFO").upper())
+
+
+_configure_operational_logging()
 logger = logging.getLogger("earos")
+
+
+class OperationalMetrics:
+    """In-process, low-cardinality health signals suitable for a protected collector pull."""
+
+    def __init__(self) -> None:
+        self.started_at = utcnow_iso()
+        self.request_count = 0
+        self.failure_count = 0
+        self.duration_ms_total = 0.0
+        self.duration_ms_max = 0.0
+        self.status_classes: Counter[str] = Counter()
+
+    def record_completion(self, status_code: int, duration_ms: float) -> None:
+        self.request_count += 1
+        self.status_classes[f"{status_code // 100}xx"] += 1
+        self.duration_ms_total += duration_ms
+        self.duration_ms_max = max(self.duration_ms_max, duration_ms)
+
+    def record_failure(self, duration_ms: float) -> None:
+        self.failure_count += 1
+        self.status_classes["5xx"] += 1
+        self.duration_ms_total += duration_ms
+        self.duration_ms_max = max(self.duration_ms_max, duration_ms)
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "started_at": self.started_at,
+            "request_count": self.request_count,
+            "failure_count": self.failure_count,
+            "duration_ms_total": round(self.duration_ms_total, 2),
+            "duration_ms_max": round(self.duration_ms_max, 2),
+            "status_classes": dict(sorted(self.status_classes.items())),
+        }
+
+
+operational_metrics = OperationalMetrics()
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -171,11 +238,35 @@ async def request_correlation(request: Request, call_next):
     started_at = time.perf_counter()
     try:
         response: Response = await call_next(request)
-    except Exception:
-        logger.exception("request_failed request_id=%s method=%s path=%s", request_id, request.method, request.url.path)
+    except Exception as exc:
+        duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        operational_metrics.record_failure(duration_ms)
+        logger.exception(
+            "request_failed",
+            extra={
+                "event": "request_failed",
+                "request_id": request_id,
+                "method": request.method,
+                "path": request.url.path,
+                "duration_ms": duration_ms,
+                "error_type": type(exc).__name__,
+            },
+        )
         raise
     response.headers["X-Request-ID"] = request_id
-    logger.info("request_completed request_id=%s method=%s path=%s status=%s duration_ms=%.2f", request_id, request.method, request.url.path, response.status_code, (time.perf_counter() - started_at) * 1000)
+    duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+    operational_metrics.record_completion(response.status_code, duration_ms)
+    logger.info(
+        "request_completed",
+        extra={
+            "event": "request_completed",
+            "request_id": request_id,
+            "method": request.method,
+            "path": request.url.path,
+            "status": response.status_code,
+            "duration_ms": duration_ms,
+        },
+    )
     return response
 
 
@@ -226,7 +317,13 @@ app.include_router(build_auth_router(db))
 
 @app.get("/api/health")
 async def health():
-    return {"ok": True, "service": "EAROS", "time": utcnow_iso()}
+    return {
+        "ok": True,
+        "service": "EAROS",
+        "kind": "liveness",
+        "version": app.version,
+        "time": utcnow_iso(),
+    }
 
 
 @app.get("/api/ready", include_in_schema=False)
@@ -234,9 +331,23 @@ async def readiness():
     try:
         await db.command("ping")
     except Exception as exc:
-        logger.warning("readiness_failed error=%s", type(exc).__name__)
+        logger.warning("readiness_failed", extra={"event": "readiness_failed", "error_type": type(exc).__name__})
         raise HTTPException(status_code=503, detail="EAROS dependencies are not ready")
-    return {"ok": True, "service": "EAROS", "time": utcnow_iso()}
+    return {"ok": True, "service": "EAROS", "kind": "readiness", "version": app.version, "time": utcnow_iso()}
+
+
+@app.get("/api/metrics", include_in_schema=False)
+async def metrics(x_operations_token: Optional[str] = Header(default=None)):
+    """Return bounded, non-tenant operational counters to an authorized collector."""
+    configured_token = os.getenv("EAROS_OPERATIONS_METRICS_TOKEN")
+    if not configured_token or not x_operations_token or not hmac.compare_digest(x_operations_token, configured_token):
+        raise HTTPException(status_code=404, detail="Not found")
+    return {
+        "service": "EAROS",
+        "version": app.version,
+        "observed_at": utcnow_iso(),
+        "metrics": operational_metrics.snapshot(),
+    }
 
 
 @app.get("/api/user-guide.pdf", include_in_schema=False)
