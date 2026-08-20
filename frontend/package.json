@@ -65,7 +65,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "verify:release-artifact": "node scripts/verify-release-artifact.mjs",
-    "verify:branding": "node scripts/verify-product-branding.mjs"
+    "verify:branding": "node scripts/verify-product-branding.mjs",
+    "verify:deployment-contract": "node scripts/verify-deployment-contract.mjs"
   },
   "browserslist": {
     "production": [

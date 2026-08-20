@@ -20,3 +20,5 @@ The repository ignore policy excludes known secret-bearing files—including `.e
 > Treat the Git-tracked source tree as the transferable EAROS artifact. Recreate dependencies from the lockfile and install instructions in the target environment. Do not copy local caches, build outputs, test reports, or environment configuration between environments.
 
 Local operational configuration must be supplied through the deployment secret manager described in the production runbook; it must never be added to this repository.
+
+For the complete classification of available source, data, configuration, documentation, and reference materials, see the [user-provided application materials inventory](./EMERGENT_MATERIALS_INVENTORY.md).
