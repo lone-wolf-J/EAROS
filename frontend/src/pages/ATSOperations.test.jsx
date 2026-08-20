@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { COLLABORATION_GUARDRAILS, HIRING_DECISION_GUARDRAILS, OFFER_GUARDRAILS, TABS, formatDate } from "./ATSOperations";
+import { COLLABORATION_GUARDRAILS, HIRING_DECISION_GUARDRAILS, HIRING_PLAN_GUARDRAILS, OFFER_GUARDRAILS, TABS, formatDate } from "./ATSOperations";
 import { AUTONOMY_GUARDRAILS, WORKFLOW_DEFINITIONS } from "./ATSAutonomy";
 import { CONTROL_PANELS, canManageEnterpriseControls } from "./EnterpriseControls";
 import { CAREER_SITE_GUARDRAILS } from "./CareerSite";
@@ -47,6 +47,13 @@ describe("ATS Operations route contract", () => {
       "offer_creation_is_an_internal_draft_only",
       "drafting_never_sends_or_extends_an_offer",
       "final_hire_outcomes_require_independent_decision_approval",
+    ]);
+  });
+  it("keeps hiring plans tenant-scoped and non-executing", () => {
+    expect(HIRING_PLAN_GUARDRAILS).toEqual([
+      "hiring_plan_is_tenant_scoped_within_the_requisition_record",
+      "plan_captures_business_justification_budget_owner_and_target_dates",
+      "planning_inputs_do_not_publish_or_change_candidate_status",
     ]);
   });
 
