@@ -87,6 +87,7 @@ describe("ATS Operations route contract", () => {
       "data-rights",
       "notifications",
       "administration",
+      "integrations",
     ]);
   });
 

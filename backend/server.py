@@ -2399,6 +2399,7 @@ async def enterprise_operational_summary(user: AppUser = Depends(_current_user))
 @app.get("/api/enterprise/administration/readiness")
 async def enterprise_administration_readiness(user: AppUser = Depends(_current_user)):
     _require_role(user, Role.ADMIN)
+    adapters = integration_job_distribution_adapters()
     return {
         "roles": [{"id": role.value, "label": role.value.replace("_", " ").title()} for role in Role],
         "sso_saml": {
@@ -2408,6 +2409,24 @@ async def enterprise_administration_readiness(user: AppUser = Depends(_current_u
         },
         "audit_exports": {"retention_days": 30, "delivery": "authenticated API response; external storage connector required for long-lived export files"},
         "retention": {"execution": "approved cases execute only through the policy-evaluated runtime", "destructive_actions": "administrator review, legal-hold validation, tenant-scoped capability controls, and runtime approval policies are required"},
+        "integration_administration": {
+            "organization_id": user.organization_id,
+            "status": "not_configured",
+            "secret_handling": "Provider credentials are supplied through deployment configuration or an approved provider connection; EAROS does not store credential values in tenant records.",
+            "external_action_posture": "draft_only_until_administrator_configuration_and_human_approval",
+            "job_distribution_adapters": [
+                {
+                    "adapter_id": adapter.adapter_id,
+                    "name": adapter.name,
+                    "provider": adapter.provider,
+                    "configuration_state": adapter.configuration_state,
+                    "requires_human_approval": adapter.requires_human_approval,
+                    "credential_fields": adapter.credential_fields,
+                    "notes": adapter.notes,
+                }
+                for adapter in adapters
+            ],
+        },
     }
 
 

@@ -90,6 +90,9 @@ def test_administration_readiness_is_admin_only_and_sso_is_metadata_only():
     assert "EAROS does not persist them in tenant records." in readiness_body
     assert "create_sso" not in readiness_body
     assert "insert_one" not in readiness_body
+    assert '"integration_administration"' in readiness_body
+    assert '"external_action_posture": "draft_only_until_administrator_configuration_and_human_approval"' in readiness_body
+    assert "integration_job_distribution_adapters()" in readiness_body
 
 
 def test_operational_summary_handler_returns_metrics_from_one_tenant_only(monkeypatch):
@@ -144,14 +147,18 @@ def test_operational_summary_handler_returns_metrics_from_one_tenant_only(monkey
 
 
 def test_administration_readiness_handler_withholds_role_data_from_non_admins():
-    admin_result = asyncio.run(server.enterprise_administration_readiness(SimpleNamespace(role=Role.ADMIN)))
+    admin_result = asyncio.run(server.enterprise_administration_readiness(SimpleNamespace(role=Role.ADMIN, organization_id="org_alpha")))
 
     assert {role["id"] for role in admin_result["roles"]} == {role.value for role in Role}
     assert admin_result["sso_saml"]["status"] == "not_configured"
     assert "secrets" not in admin_result["sso_saml"]
+    assert admin_result["integration_administration"]["organization_id"] == "org_alpha"
+    assert admin_result["integration_administration"]["status"] == "not_configured"
+    assert admin_result["integration_administration"]["job_distribution_adapters"]
+    assert all(adapter["configuration_state"] == "not_configured" for adapter in admin_result["integration_administration"]["job_distribution_adapters"])
 
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(server.enterprise_administration_readiness(SimpleNamespace(role=Role.RECRUITER)))
+        asyncio.run(server.enterprise_administration_readiness(SimpleNamespace(role=Role.RECRUITER, organization_id="org_alpha")))
     assert exc.value.status_code == 403
 
 
