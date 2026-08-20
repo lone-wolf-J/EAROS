@@ -12,6 +12,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from typing import Optional
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Cookie, Header, HTTPException, Request, Response
@@ -21,16 +22,41 @@ from pydantic import BaseModel, ConfigDict, Field
 from foundation import Role, new_user_id, utcnow_iso
 
 SESSION_TTL_DAYS = int(os.getenv("EAROS_SESSION_TTL_DAYS", "7"))
-AUTH_SESSION_DATA_URL = os.getenv(
-    "AUTH_SESSION_DATA_URL",
-    "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
-)
+DEMONSTRATION_SESSION_DATA_URL = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
 LOG = logging.getLogger("earos.auth")
 VALID_ROLES = {item.value for item in Role}
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
     return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_production() -> bool:
+    return os.getenv("EAROS_ENV", "development").strip().lower() == "production"
+
+
+def _configured_session_data_url() -> str:
+    """Return a validated identity-session endpoint without trusting demo defaults in production."""
+    configured = os.getenv("AUTH_SESSION_DATA_URL", "").strip()
+    if not configured:
+        if _is_production():
+            raise RuntimeError("AUTH_SESSION_DATA_URL must be explicitly configured in production")
+        return DEMONSTRATION_SESSION_DATA_URL
+    parsed = urlparse(configured)
+    if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise RuntimeError("AUTH_SESSION_DATA_URL must be an absolute HTTPS endpoint without credentials, query, or fragment")
+    if _is_production() and configured == DEMONSTRATION_SESSION_DATA_URL:
+        raise RuntimeError("AUTH_SESSION_DATA_URL must not use the demonstration identity service in production")
+    return configured
+
+
+def validate_production_auth_configuration() -> None:
+    """Fail application startup when production identity or developer-access controls are unsafe."""
+    if not _is_production():
+        return
+    _configured_session_data_url()
+    if _env_flag("EAROS_ENABLE_DEV_LOGIN", False):
+        raise RuntimeError("EAROS_ENABLE_DEV_LOGIN must be disabled in production")
 
 
 def _session_digest(token: str) -> str:
@@ -105,10 +131,9 @@ async def _provision_or_update_user(db: AsyncIOMotorDatabase, identity: dict) ->
     organization_id = identity.get("organization_id") or identity.get("organizationId") or os.getenv("EAROS_DEFAULT_ORGANIZATION_ID")
     if not organization_id:
         raise HTTPException(status_code=422, detail="Authenticated identity is missing an organization assignment.")
-    role = str(identity.get("role", Role.RECRUITER.value))
-    if role not in VALID_ROLES:
-        role = Role.RECRUITER.value
-    user = AppUser(user_id=new_user_id(), email=email, name=identity.get("name") or email, picture=identity.get("picture"), role=role, organization_id=str(organization_id))
+    # JIT identities start at the least-privileged staffing role. Administrators
+    # assign elevated roles through governed member administration after provisioning.
+    user = AppUser(user_id=new_user_id(), email=email, name=identity.get("name") or email, picture=identity.get("picture"), role=Role.RECRUITER.value, organization_id=str(organization_id))
     await db.users.insert_one(user.model_dump())
     await db.audit_events.insert_one({"event_type": "identity.user_provisioned", "organization_id": user.organization_id, "actor_user_id": user.user_id, "created_at": utcnow_iso(), "metadata": {"role": user.role}})
     return user
@@ -124,7 +149,7 @@ def build_router(db: AsyncIOMotorDatabase) -> APIRouter:
             raise HTTPException(status_code=401, detail="Invalid upstream session identifier")
         try:
             async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
-                upstream = await client.get(AUTH_SESSION_DATA_URL, headers={"X-Session-ID": x_session_id})
+                upstream = await client.get(_configured_session_data_url(), headers={"X-Session-ID": x_session_id})
         except httpx.HTTPError as exc:
             LOG.exception("Configured identity service was unavailable")
             raise HTTPException(status_code=502, detail="Configured identity service is unavailable") from exc
@@ -162,7 +187,7 @@ def build_router(db: AsyncIOMotorDatabase) -> APIRouter:
     @router.post("/dev-login", include_in_schema=False)
     async def dev_login(request: Request, response: Response, email: str):
         """Development-only login. It is unreachable unless explicitly enabled."""
-        if not _env_flag("EAROS_ENABLE_DEV_LOGIN", False):
+        if _is_production() or not _env_flag("EAROS_ENABLE_DEV_LOGIN", False):
             raise HTTPException(status_code=404, detail="Not found")
         identity = {"email": email, "name": email, "organization_id": os.getenv("EAROS_DEFAULT_ORGANIZATION_ID"), "role": Role.RECRUITER.value}
         user = await _provision_or_update_user(db, identity)

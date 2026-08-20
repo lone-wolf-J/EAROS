@@ -27,7 +27,23 @@ def test_identity_provisioning_requires_explicit_tenant_assignment() -> None:
 
 def test_developer_login_is_disabled_unless_explicitly_enabled() -> None:
     assert "EAROS_ENABLE_DEV_LOGIN" in AUTH_SOURCE
+    assert 'if _is_production() or not _env_flag("EAROS_ENABLE_DEV_LOGIN", False):' in AUTH_SOURCE
     assert 'raise HTTPException(status_code=404, detail="Not found")' in AUTH_SOURCE
+
+
+def test_production_identity_service_requires_an_explicit_non_demo_https_override() -> None:
+    assert 'os.getenv("AUTH_SESSION_DATA_URL", "").strip()' in AUTH_SOURCE
+    assert "AUTH_SESSION_DATA_URL must be explicitly configured in production" in AUTH_SOURCE
+    assert "AUTH_SESSION_DATA_URL must not use the demonstration identity service in production" in AUTH_SOURCE
+    assert 'parsed.scheme != "https"' in AUTH_SOURCE
+    assert "validate_production_auth_configuration()" in SERVER_SOURCE
+
+
+def test_jit_provisioning_starts_with_the_least_privileged_role() -> None:
+    provisioning_start = AUTH_SOURCE.index("async def _provision_or_update_user")
+    provisioning_block = AUTH_SOURCE[provisioning_start:provisioning_start + 2_500]
+    assert "role=Role.RECRUITER.value" in provisioning_block
+    assert 'identity.get("role"' not in provisioning_block
 
 
 def test_production_cors_rejects_wildcard_configuration() -> None:
@@ -97,6 +113,7 @@ def test_production_runbook_covers_deployment_backup_incident_and_go_live_contro
     ):
         assert heading in RUNBOOK_SOURCE
     assert "CORS_ORIGINS" in RUNBOOK_SOURCE
+    assert "explicitly overridden" in RUNBOOK_SOURCE
     assert "X-Request-ID" in RUNBOOK_SOURCE
     assert "draft-only" in RUNBOOK_SOURCE
 

@@ -28,7 +28,7 @@ The deployment operator must inject configuration through the approved secret ma
 | `CORS_ORIGINS` | Explicit comma-separated HTTPS origins only. Wildcards and an empty value are rejected in production. |
 | `EAROS_PUBLIC_API_ORIGIN` | Public HTTPS API origin supplied as the frontend image build argument. |
 | `EAROS_COOKIE_SECURE` | `true`. Use `EAROS_COOKIE_SAMESITE=none` only when cross-site cookies are genuinely required and HTTPS is in use. |
-| `AUTH_SESSION_DATA_URL` | Approved identity-session endpoint. Treat it as an external dependency and monitor its availability separately. |
+| `AUTH_SESSION_DATA_URL` | **Must be explicitly overridden** with the approved production identity-session endpoint. It must be an absolute HTTPS URL without embedded credentials, a query string, or fragment. EAROS refuses to start in production when this value is absent or still points to the inherited demonstration identity service. Treat it as an external dependency and monitor its availability separately. |
 | `EAROS_ALLOW_JIT_PROVISIONING` | Keep disabled unless a documented enrollment window has been approved. If enabled, supply an explicit tenant assignment path. |
 | `EAROS_ENABLE_DEV_LOGIN`, `EAROS_ENABLE_BOOTSTRAP_ENDPOINT` | Keep disabled. Bootstrap access must only be temporarily enabled during a controlled initial setup with a unique secret. |
 | `EAROS_LOG_LEVEL` | Default to `INFO`; use `WARNING` for degraded log-collection capacity rather than suppressing error events. |
@@ -38,6 +38,7 @@ The deployment operator must inject configuration through the approved secret ma
 
 1. Build from a reviewed commit and confirm the exact release revision in the change record.
 2. Populate deployment secrets through the platform secret store. Validate that no development, demonstration, or shared tenant configuration is present.
+   Confirm `AUTH_SESSION_DATA_URL` names the approved production identity service and that `EAROS_ENABLE_DEV_LOGIN` is unset or `false`; production startup fails closed when either authentication boundary is unsafe.
 3. Validate the Compose definition without starting a release:
 
    ```bash

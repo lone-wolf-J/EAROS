@@ -4,7 +4,14 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi import HTTPException
 
-from applications.auth import AppUser, _create_session, _provision_or_update_user, _read_session_user
+from applications.auth import (
+    AppUser,
+    _configured_session_data_url,
+    _create_session,
+    _provision_or_update_user,
+    _read_session_user,
+    validate_production_auth_configuration,
+)
 
 
 class FakeCollection:
@@ -93,3 +100,36 @@ def test_jit_provisioning_requires_an_explicit_organization(monkeypatch: pytest.
     with pytest.raises(HTTPException) as exc:
         run(_provision_or_update_user(FakeDatabase(), {"email": "new@example.com", "name": "New User"}))
     assert exc.value.status_code == 422
+
+
+def test_production_rejects_a_missing_or_demonstration_identity_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EAROS_ENV", "production")
+    monkeypatch.delenv("AUTH_SESSION_DATA_URL", raising=False)
+    with pytest.raises(RuntimeError, match="explicitly configured"):
+        _configured_session_data_url()
+
+    monkeypatch.setenv("AUTH_SESSION_DATA_URL", "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data")
+    with pytest.raises(RuntimeError, match="demonstration identity service"):
+        _configured_session_data_url()
+
+
+def test_production_auth_configuration_requires_safe_identity_url_and_no_dev_login(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EAROS_ENV", "production")
+    monkeypatch.setenv("AUTH_SESSION_DATA_URL", "https://identity.example.com/session-data")
+    monkeypatch.setenv("EAROS_ENABLE_DEV_LOGIN", "false")
+    validate_production_auth_configuration()
+
+    monkeypatch.setenv("EAROS_ENABLE_DEV_LOGIN", "true")
+    with pytest.raises(RuntimeError, match="must be disabled"):
+        validate_production_auth_configuration()
+
+
+def test_jit_provisioning_ignores_upstream_elevated_role_claims(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EAROS_ALLOW_JIT_PROVISIONING", "true")
+    user = run(_provision_or_update_user(FakeDatabase(), {
+        "email": "new-admin-claim@example.com",
+        "name": "New user",
+        "organization_id": "org_1",
+        "role": "admin",
+    }))
+    assert user.role == "recruiter"

@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
-from applications.auth import AppUser, build_router as build_auth_router, get_current_user
+from applications.auth import AppUser, build_router as build_auth_router, get_current_user, validate_production_auth_configuration
 from foundation import (
     AuditExportStatus,
     DataSubjectRequestStatus,
@@ -214,6 +214,9 @@ def _configured_cors_origins() -> list[str]:
     if production and (not configured or "*" in configured):
         raise RuntimeError("CORS_ORIGINS must be an explicit allowlist in production")
     return configured or ["http://localhost:3000", "http://localhost:3001"]
+
+
+validate_production_auth_configuration()
 
 
 app = FastAPI(
