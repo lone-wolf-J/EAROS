@@ -1,10 +1,11 @@
 import axios from "axios";
+import { resolveBackendUrl } from "./backendUrl";
 
-const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || "").replace(/\/$/, "");
+export { resolveBackendUrl } from "./backendUrl";
 
-if (import.meta.env.PROD && !BACKEND_URL) {
-  throw new Error("VITE_BACKEND_URL must be set for an EAROS production client build.");
-}
+const BACKEND_URL = resolveBackendUrl(import.meta.env.VITE_BACKEND_URL, {
+  production: import.meta.env.PROD,
+});
 
 export const API = `${BACKEND_URL}/api`;
 

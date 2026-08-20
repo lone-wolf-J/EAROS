@@ -33,4 +33,11 @@ describe("EAROS Vite client ownership", () => {
       preview: "vite preview",
     });
   });
+
+  it("fails closed on unsafe production API-origin configuration before bundling", () => {
+    const viteConfig = readFrontendFile("vite.config.mjs");
+
+    expect(viteConfig).toContain('import { defineConfig, loadEnv } from "vite";');
+    expect(viteConfig).toContain('resolveBackendUrl(env.VITE_BACKEND_URL, { production: true });');
+  });
 });
