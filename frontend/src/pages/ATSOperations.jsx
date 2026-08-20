@@ -29,6 +29,7 @@ const TABS = [
   { key: "interviews", label: "Interviews", icon: CalendarDays },
   { key: "collaboration", label: "Collaboration", icon: UsersRound },
   { key: "distribution", label: "Distribution", icon: Send },
+  { key: "offers", label: "Offers", icon: Handshake },
   { key: "handoffs", label: "Onboarding", icon: Handshake },
 ];
 
@@ -45,6 +46,12 @@ const HIRING_DECISION_GUARDRAILS = [
   "application_status_changes_only_after_independent_grant",
 ];
 
+const OFFER_GUARDRAILS = [
+  "offer_creation_is_an_internal_draft_only",
+  "drafting_never_sends_or_extends_an_offer",
+  "final_hire_outcomes_require_independent_decision_approval",
+];
+
 function formatDate(value) {
   if (!value) return "—";
   const date = new Date(value);
@@ -58,6 +65,7 @@ function Status({ value }) {
     active: "border-sky-500/30 bg-sky-500/10 text-sky-300",
     scheduled: "border-violet-500/30 bg-violet-500/10 text-violet-300",
     pending_approval: "border-amber-500/30 bg-amber-500/10 text-amber-300",
+    awaiting_approval: "border-amber-500/30 bg-amber-500/10 text-amber-300",
     effective: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
     denied: "border-rose-500/30 bg-rose-500/10 text-rose-300",
     ready_for_handoff: "border-teal-500/30 bg-teal-500/10 text-teal-300",
@@ -160,13 +168,13 @@ export default function ATSOperations() {
   const candidateNotificationPath = selectedActivityCandidateId ? `/ats/candidates/${selectedActivityCandidateId}/notification-deliveries` : null;
   const { data: candidateNotificationDeliveries = [], mutate: mutateCandidateNotificationDeliveries } = useSWR(candidateNotificationPath, fetcher);
   const { data: hiringDecisions = [], mutate: mutateHiringDecisions } = useSWR("/ats/hiring-decisions", fetcher);
-  const { data: offers = [] } = useSWR("/world/offers", fetcher);
+  const { data: offers = [], mutate: mutateOffers } = useSWR("/ats/offers", fetcher);
   const { data: handoffs = [], mutate: mutateHandoffs } = useSWR("/ats/onboarding-handoffs", fetcher);
 
   const candidateById = useMemo(() => new Map(candidates.map((candidate) => [candidate.candidate_id, candidate])), [candidates]);
   const requisitionById = useMemo(() => new Map(requisitions.map((requisition) => [requisition.requisition_id, requisition])), [requisitions]);
 
-  const refreshAll = () => Promise.all([mutateRequisitions(), mutateApplications(), mutatePools(), mutateInterviews(), mutateCandidates(), mutateCrmCandidates(), mutateCandidateTags(), mutateScorecards(), mutateInterviewFeedback(), mutateCandidateActivity(), mutateCandidateMentions(), mutateCandidateCommunications(), mutateCandidateNotificationDeliveries(), mutateHiringDecisions(), mutateHandoffs()]);
+  const refreshAll = () => Promise.all([mutateRequisitions(), mutateApplications(), mutatePools(), mutateInterviews(), mutateCandidates(), mutateCrmCandidates(), mutateCandidateTags(), mutateScorecards(), mutateInterviewFeedback(), mutateCandidateActivity(), mutateCandidateMentions(), mutateCandidateCommunications(), mutateCandidateNotificationDeliveries(), mutateHiringDecisions(), mutateOffers(), mutateHandoffs()]);
   const create = async (path, body, mutate) => {
     setError("");
     setSaving(true);
@@ -317,7 +325,7 @@ export default function ATSOperations() {
                   </button>
                 ))}
               </div>
-              {tab !== "distribution" && <button onClick={() => setModal(tab === "requisitions" ? "requisition" : tab === "candidates" ? "candidate" : tab === "applications" ? "application" : tab === "pools" ? "pool" : tab === "interviews" ? "interview" : tab === "collaboration" ? "scorecard" : "handoff")} className="mb-2 inline-flex items-center gap-2 rounded-sm bg-gradient-to-r from-violet-600 to-teal-500 px-3 py-2 text-xs font-bold text-white transition hover:brightness-110 active:scale-[0.98]">
+              {tab !== "distribution" && <button onClick={() => setModal(tab === "requisitions" ? "requisition" : tab === "candidates" ? "candidate" : tab === "applications" ? "application" : tab === "pools" ? "pool" : tab === "interviews" ? "interview" : tab === "collaboration" ? "scorecard" : tab === "offers" ? "offer" : "handoff")} className="mb-2 inline-flex items-center gap-2 rounded-sm bg-gradient-to-r from-violet-600 to-teal-500 px-3 py-2 text-xs font-bold text-white transition hover:brightness-110 active:scale-[0.98]">
                 <Plus className="h-3.5 w-3.5" /> New {tab === "pools" ? "pool" : tab === "collaboration" ? "scorecard" : tab.slice(0, -1)}
               </button>}
             </div>
@@ -359,6 +367,8 @@ export default function ATSOperations() {
 
               {tab === "distribution" && <div className="space-y-4"><JobDistributionWorkspace requisitions={requisitions} adapters={distributionAdapters} selectedRequisitionId={selectedDistributionRequisitionId} setSelectedRequisitionId={setSelectedDistributionRequisitionId} saving={saving} onUpdatePublication={updatePublication} onRecordReferral={() => selectedDistributionRequisitionId && setModal("referral")} /><CareerIntakeManager requisitions={requisitions} selectedRequisitionId={selectedDistributionRequisitionId} onRecordReferral={() => selectedDistributionRequisitionId && setModal("referral")} /></div>}
 
+              {tab === "offers" && <OfferWorkspace offers={offers} applications={applications} candidates={candidateById} onDraft={() => setModal("offer")} />}
+
               {tab === "handoffs" && (handoffs.length ? (
                 <div className="divide-y divide-slate-800 overflow-hidden rounded-sm border border-slate-800">{handoffs.map((handoff) => <div key={handoff.onboarding_handoff_id} className="grid gap-3 bg-slate-950/40 px-4 py-4 transition hover:bg-slate-800/30 md:grid-cols-[1.6fr_1fr_auto] md:items-center"><div><div className="font-semibold text-slate-100">{candidateById.get(handoff.candidate_id)?.full_name || handoff.candidate_id}</div><div className="mt-1 font-mono2 text-[10px] text-slate-500">OFFER · {handoff.offer_id} · {handoff.destination_system || "Destination pending"}</div></div><div className="text-xs text-slate-400">START · {handoff.target_start_date || "Not scheduled"}<div className="mt-1 font-mono2 text-[10px] text-slate-600">{handoff.checklist?.length || 0} routing items</div></div><Status value={handoff.status} /></div>)}</div>
               ) : <EmptyState title="Handoff accepted hires with context, not secrets" detail="Create a minimal routing record from an accepted offer. Payroll, identity-provider credentials, and background-check files remain in the downstream onboarding system." onCreate={() => setModal("handoff")} />)}
@@ -378,6 +388,7 @@ export default function ATSOperations() {
         {modal === "communication" && <CandidateCommunicationForm candidate={candidateById.get(selectedActivityCandidateId)} saving={saving} onClose={() => setModal(null)} onSubmit={recordCandidateCommunication} />}
         {modal === "candidate-notification" && <CandidateNotificationForm candidate={candidateById.get(selectedActivityCandidateId)} saving={saving} onClose={() => setModal(null)} onSubmit={recordCandidateNotification} />}
         {modal === "hiring-decision" && <HiringDecisionForm applications={applications} candidates={candidateById} saving={saving} onClose={() => setModal(null)} onSubmit={(body) => create("/ats/hiring-decisions", body, mutateHiringDecisions)} />}
+        {modal === "offer" && <OfferDraftForm applications={applications} candidates={candidateById} saving={saving} onClose={() => setModal(null)} onSubmit={(body) => create("/ats/offers", body, mutateOffers)} />}
         {modal === "handoff" && <HandoffForm offers={offers} candidates={candidateById} saving={saving} onClose={() => setModal(null)} onSubmit={(body) => create("/ats/onboarding-handoffs", body, mutateHandoffs)} />}
       </div>
     </AppLayout>
@@ -418,6 +429,29 @@ function CandidateNotificationWorkspace({ candidates, selectedCandidateId, setSe
 function HiringDecisionWorkspace({ applications, candidates, decisions, onRequest }) {
   const activeApplications = applications.filter((application) => application.status === "active");
   return <section className="rounded-sm border border-amber-500/25 bg-amber-500/5 p-4" data-testid="hiring-decision-workspace"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="font-mono2 text-[10px] tracking-widest text-amber-300">GOVERNED HIRING DECISIONS</div><p className="mt-1 max-w-3xl text-xs leading-5 text-slate-400">Recruiters may request a final hire or reject outcome only after evidence review. EAROS creates a tenant-scoped approval request; an independent approver must decide it in Governance before the application state can change.</p></div><button type="button" disabled={!activeApplications.length} onClick={onRequest} className="rounded-sm border border-amber-400/40 bg-amber-400/10 px-2.5 py-1.5 text-xs font-bold text-amber-100 transition hover:bg-amber-400/20 disabled:cursor-not-allowed disabled:opacity-40">Request decision review</button></div><div className="mt-4 space-y-2">{decisions.length ? decisions.map((decision) => <div key={decision.hiring_decision_id} className="grid gap-2 rounded-sm border border-slate-800 bg-slate-950/50 p-3 md:grid-cols-[1fr_auto]"><div><div className="font-semibold capitalize text-slate-100">{decision.outcome} · {candidates.get(decision.candidate_id)?.full_name || decision.candidate_id}</div><div className="mt-1 font-mono2 text-[10px] text-slate-500">APPLICATION · {decision.application_id} · REQUESTED {formatDate(decision.created_at)}</div><p className="mt-2 text-xs leading-5 text-slate-400">{decision.rationale}</p></div><div className="flex items-start justify-between gap-2 md:flex-col md:items-end"><Status value={decision.status} /><span className="font-mono2 text-[9px] text-slate-600">APPROVAL · {decision.approval_id || "PENDING"}</span></div></div>) : <div className="rounded-sm border border-dashed border-amber-500/25 px-4 py-6 text-center text-xs text-slate-500">No final outcome has been requested. Scorecard evidence remains independent until a human requests and approves a decision.</div>}</div></section>;
+}
+
+function OfferWorkspace({ offers, applications, candidates, onDraft }) {
+  const activeApplications = applications.filter((application) => application.status === "active" && application.job_id);
+  return <section className="space-y-4" data-testid="offer-workspace">
+    <div className="rounded-sm border border-teal-400/25 bg-teal-400/5 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="font-mono2 text-[10px] tracking-widest text-teal-200">GOVERNED OFFER DRAFTS</div><p className="mt-1 max-w-3xl text-xs leading-5 text-slate-400">Prepare an internal compensation record for an active application. Creating a draft does not send, extend, accept, or approve an offer. A final hire outcome remains in the independent decision-review flow.</p></div><button type="button" disabled={!activeApplications.length} onClick={onDraft} className="rounded-sm border border-teal-400/35 bg-teal-400/10 px-2.5 py-1.5 text-xs font-bold text-teal-100 transition hover:bg-teal-400/20 disabled:cursor-not-allowed disabled:opacity-40">Draft offer</button></div>
+      <div className="mt-4 rounded-sm border border-teal-400/20 bg-slate-950/45 px-3 py-2.5 text-xs leading-5 text-teal-50/75">No candidate communication, e-signature, payroll routing, or final status mutation occurs here. EAROS records a tenant-scoped internal draft and its audit event only.</div>
+    </div>
+    <div className="space-y-2">{offers.length ? offers.map((offer) => <article key={offer.offer_id} className="grid gap-3 rounded-sm border border-slate-800 bg-slate-950/40 p-4 md:grid-cols-[1fr_auto]"><div><div className="font-semibold text-slate-100">{candidates.get(offer.candidate_id)?.full_name || offer.candidate_id}</div><div className="mt-1 font-mono2 text-[10px] text-slate-500">JOB · {offer.job_id} · OFFER {offer.offer_id}</div><div className="mt-3 flex flex-wrap gap-1.5"><span className="rounded-sm border border-slate-700 px-1.5 py-0.5 font-mono2 text-[10px] text-slate-300">BASE · {offer.currency} {Number(offer.base_salary || 0).toLocaleString()}</span>{Number(offer.bonus || 0) > 0 && <span className="rounded-sm border border-slate-700 px-1.5 py-0.5 font-mono2 text-[10px] text-slate-300">BONUS · {offer.currency} {Number(offer.bonus).toLocaleString()}</span>}{Number(offer.equity_units || 0) > 0 && <span className="rounded-sm border border-slate-700 px-1.5 py-0.5 font-mono2 text-[10px] text-slate-300">EQUITY · {Number(offer.equity_units).toLocaleString()}</span>}</div></div><div className="flex items-start justify-between gap-2 md:flex-col md:items-end"><Status value={offer.status} /><span className="font-mono2 text-[9px] text-slate-600">RECORDED {formatDate(offer.created_at)}</span></div></article>) : <EmptyState title="No internal offer drafts" detail="Select an active application to record a reviewable compensation draft. Offer delivery remains inactive." onCreate={activeApplications.length ? onDraft : undefined} />}</div>
+  </section>;
+}
+
+function OfferDraftForm({ applications, candidates, saving, onClose, onSubmit }) {
+  const eligible = applications.filter((application) => application.status === "active" && application.job_id);
+  const [applicationId, setApplicationId] = useState(eligible[0]?.application_id || "");
+  const [baseSalary, setBaseSalary] = useState("");
+  const [bonus, setBonus] = useState("0");
+  const [equityUnits, setEquityUnits] = useState("0");
+  const [signingBonus, setSigningBonus] = useState("0");
+  const [currency, setCurrency] = useState("USD");
+  const application = eligible.find((item) => item.application_id === applicationId);
+  return <Modal title="Draft internal offer" onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); if (application) onSubmit({ candidate_id: application.candidate_id, job_id: application.job_id, base_salary: Number(baseSalary), bonus: Number(bonus || 0), equity_units: Number(equityUnits || 0), signing_bonus: Number(signingBonus || 0), currency: currency.toUpperCase() }); }} className="space-y-4 p-5"><p className="rounded-sm border border-teal-400/20 bg-teal-400/5 px-3 py-2.5 text-xs leading-5 text-teal-50/75">This records an internal draft only. It does not send an offer, contact a candidate, modify a final application status, or replace independent decision approval.</p><Field label="ACTIVE APPLICATION"><select required value={applicationId} onChange={(event) => setApplicationId(event.target.value)} className={inputClass}><option value="">Select an active application</option>{eligible.map((item) => <option key={item.application_id} value={item.application_id}>{candidates.get(item.candidate_id)?.full_name || item.candidate_id} · {item.current_stage_name}</option>)}</select></Field><div className="grid gap-3 sm:grid-cols-2"><Field label="BASE SALARY"><input className={inputClass} required min="0" type="number" value={baseSalary} onChange={(event) => setBaseSalary(event.target.value)} /></Field><Field label="CURRENCY"><input className={inputClass} required maxLength="3" pattern="[A-Za-z]{3}" value={currency} onChange={(event) => setCurrency(event.target.value.toUpperCase())} /></Field><Field label="BONUS"><input className={inputClass} min="0" type="number" value={bonus} onChange={(event) => setBonus(event.target.value)} /></Field><Field label="SIGNING BONUS"><input className={inputClass} min="0" type="number" value={signingBonus} onChange={(event) => setSigningBonus(event.target.value)} /></Field><Field label="EQUITY UNITS"><input className={inputClass} min="0" type="number" value={equityUnits} onChange={(event) => setEquityUnits(event.target.value)} /></Field></div><div className="flex justify-end gap-2 border-t border-slate-800 pt-4"><button type="button" onClick={onClose} className="rounded-sm px-3 py-2 text-xs font-semibold text-slate-400 hover:bg-slate-800">Cancel</button><button disabled={saving || !application || !baseSalary} className="rounded-sm bg-gradient-to-r from-violet-600 to-teal-500 px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">{saving ? "Saving…" : "Record offer draft"}</button></div></form></Modal>;
 }
 
 function JobDistributionWorkspace({ requisitions, adapters, selectedRequisitionId, setSelectedRequisitionId, saving, onUpdatePublication, onRecordReferral }) {
@@ -491,4 +525,4 @@ function HandoffForm({ offers, candidates, saving, onClose, onSubmit }) {
   return <Modal title="Create onboarding handoff" onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); const offer = acceptedOffers.find((item) => item.offer_id === offerId); if (!offer) return; onSubmit({ offer_id: offer.offer_id, candidate_id: offer.candidate_id, job_id: offer.job_id, destination_system: destinationSystem || null, target_start_date: targetStartDate || null, checklist: [] }); }}><div className="grid gap-4 px-5 py-5"><div className="rounded-sm border border-teal-500/20 bg-teal-500/5 px-3 py-2 text-xs leading-5 text-teal-100">Only accepted offers can transfer. This record routes work; it deliberately never stores payroll, credentials, or background-check documents.</div><Field label="ACCEPTED OFFER"><select required value={offerId} onChange={(event) => setOfferId(event.target.value)} className={inputClass}><option value="">Select an accepted offer</option>{acceptedOffers.map((offer) => <option key={offer.offer_id} value={offer.offer_id}>{candidates.get(offer.candidate_id)?.full_name || offer.candidate_id} · {offer.offer_id}</option>)}</select></Field><Field label="DESTINATION SYSTEM"><input value={destinationSystem} onChange={(event) => setDestinationSystem(event.target.value)} className={inputClass} placeholder="e.g. HRIS integration" /></Field><Field label="TARGET START DATE"><input type="date" value={targetStartDate} onChange={(event) => setTargetStartDate(event.target.value)} className={inputClass} /></Field></div><FormActions saving={saving} onClose={onClose} label="Create handoff" /></form></Modal>;
 }
 
-export { TABS, COLLABORATION_GUARDRAILS, HIRING_DECISION_GUARDRAILS, formatDate };
+export { TABS, COLLABORATION_GUARDRAILS, HIRING_DECISION_GUARDRAILS, OFFER_GUARDRAILS, formatDate };

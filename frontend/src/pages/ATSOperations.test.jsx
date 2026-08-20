@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { COLLABORATION_GUARDRAILS, HIRING_DECISION_GUARDRAILS, TABS, formatDate } from "./ATSOperations";
+import { COLLABORATION_GUARDRAILS, HIRING_DECISION_GUARDRAILS, OFFER_GUARDRAILS, TABS, formatDate } from "./ATSOperations";
 import { AUTONOMY_GUARDRAILS, WORKFLOW_DEFINITIONS } from "./ATSAutonomy";
 import { CONTROL_PANELS, canManageEnterpriseControls } from "./EnterpriseControls";
 import { CAREER_SITE_GUARDRAILS } from "./CareerSite";
@@ -16,6 +16,7 @@ describe("ATS Operations route contract", () => {
       "interviews",
       "collaboration",
       "distribution",
+      "offers",
       "handoffs",
     ]);
   });
@@ -38,6 +39,14 @@ describe("ATS Operations route contract", () => {
       "final_outcomes_enter_governance_approval_queue",
       "requester_cannot_approve_or_deny_own_decision",
       "application_status_changes_only_after_independent_grant",
+    ]);
+  });
+
+  it("keeps offer drafting record-only and distinct from final hiring approval", () => {
+    expect(OFFER_GUARDRAILS).toEqual([
+      "offer_creation_is_an_internal_draft_only",
+      "drafting_never_sends_or_extends_an_offer",
+      "final_hire_outcomes_require_independent_decision_approval",
     ]);
   });
 
