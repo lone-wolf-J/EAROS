@@ -233,6 +233,7 @@ class EventType(str, Enum):
     CANDIDATE_NOTIFICATION_RECORDED = "world.candidate_notification.recorded"
     RECRUITER_ALERT_CREATED = "world.recruiter_alert.created"
     RECRUITER_ALERT_READ = "world.recruiter_alert.read"
+    OFFER_DRAFT_CREATED = "world.offer.draft_created"
     OFFER_EXTENDED = "world.offer.extended"
     JOB_CREATED = "world.job.created"
     RETENTION_CASE_REQUESTED = "world.retention_case.requested"

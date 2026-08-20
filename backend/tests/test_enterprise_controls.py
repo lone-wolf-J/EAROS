@@ -1249,3 +1249,257 @@ def test_data_subject_erasure_cannot_be_marked_fulfilled_before_policy_gated_ret
 
     assert exc.value.status_code == 409
     assert "policy-gated retention execution" in exc.value.detail
+
+
+def test_application_stage_movement_is_recruiter_controlled_and_terminal_outcomes_are_governed(monkeypatch):
+    calls = []
+    pipeline = server.Pipeline(
+        organization_id="org_alpha",
+        name="Standard hiring",
+        stages=[
+            server.PipelineStageDefinition(stage_id="stage_applied", name="Applied", order=0, is_default=True),
+            server.PipelineStageDefinition(stage_id="stage_interview", name="Interview", order=1),
+            server.PipelineStageDefinition(stage_id="stage_hired", name="Hired", order=2, category="terminal_hired"),
+        ],
+    )
+    application = server.Application(
+        organization_id="org_alpha",
+        application_id="app_alpha",
+        candidate_id="cand_alpha",
+        pipeline_id=pipeline.pipeline_id,
+        current_stage_id="stage_applied",
+        current_stage_name="Applied",
+    )
+
+    class _World:
+        async def get_application(self, organization_id, application_id):
+            return application if (organization_id, application_id) == ("org_alpha", "app_alpha") else None
+
+        async def get_pipeline(self, organization_id, pipeline_id):
+            return pipeline if (organization_id, pipeline_id) == ("org_alpha", pipeline.pipeline_id) else None
+
+        async def upsert_application(self, updated):
+            calls.append(("upsert", updated.current_stage_name))
+            return updated
+
+        async def record_activity(self, activity):
+            calls.append(("activity", activity.event_type, activity.payload["to"]))
+
+    class _Governance:
+        async def emit(self, event):
+            calls.append(("event", event.event_type.value, event.payload["to"]))
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    recruiter = SimpleNamespace(user_id="recruiter_alpha", organization_id="org_alpha", role=Role.RECRUITER)
+    manager = SimpleNamespace(user_id="manager_alpha", organization_id="org_alpha", role=Role.HIRING_MANAGER)
+
+    with pytest.raises(HTTPException) as forbidden:
+        asyncio.run(server.move_ats_application_stage(
+            "app_alpha", server.ApplicationStageRequest(stage_id="stage_interview", stage_name="Interview"), manager
+        ))
+    assert forbidden.value.status_code == 403
+
+    with pytest.raises(HTTPException) as terminal:
+        asyncio.run(server.move_ats_application_stage(
+            "app_alpha", server.ApplicationStageRequest(stage_id="stage_hired", stage_name="Hired"), recruiter
+        ))
+    assert terminal.value.status_code == 409
+    assert "approval-gated hiring decision" in terminal.value.detail
+
+    moved = asyncio.run(server.move_ats_application_stage(
+        "app_alpha", server.ApplicationStageRequest(stage_id="stage_interview", stage_name="Interview"), recruiter
+    ))
+    assert moved["current_stage_name"] == "Interview"
+    assert ("upsert", "Interview") in calls
+    assert ("event", "world.application.stage_changed", "Interview") in calls
+
+
+def test_offer_draft_is_tenant_scoped_audited_and_never_extended_by_creation(monkeypatch):
+    calls = []
+
+    class _World:
+        async def upsert_offer(self, offer):
+            calls.append(("offer", offer.organization_id, offer.candidate_id, offer.status.value))
+            return offer
+
+        async def record_activity(self, activity):
+            calls.append(("activity", activity.organization_id, activity.event_type, activity.payload["status"]))
+
+    class _Governance:
+        async def emit(self, event):
+            calls.append(("event", event.organization_id, event.event_type.value, event.payload["status"]))
+
+    async def _candidate(candidate_id, _user):
+        return SimpleNamespace(candidate_id=candidate_id, organization_id="org_alpha")
+
+    async def _job(job_id, _user):
+        return SimpleNamespace(job_id=job_id, organization_id="org_alpha")
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    monkeypatch.setattr(server, "_scoped_candidate", _candidate)
+    monkeypatch.setattr(server, "_scoped_job", _job)
+    recruiter = SimpleNamespace(user_id="recruiter_alpha", organization_id="org_alpha", role=Role.RECRUITER)
+
+    result = asyncio.run(server.create_ats_offer_draft(
+        server.OfferDraftCreateRequest(candidate_id="cand_alpha", job_id="job_alpha", base_salary=175000, currency="USD"),
+        recruiter,
+    ))
+
+    assert result["organization_id"] == "org_alpha"
+    assert result["status"] == "draft"
+    assert ("offer", "org_alpha", "cand_alpha", "draft") in calls
+    assert ("event", "org_alpha", "world.offer.draft_created", "draft") in calls
+    assert all("extended" not in call for call in calls)
+
+
+def test_core_ats_lifecycle_creates_canonical_records_and_defers_final_status_to_independent_approval(monkeypatch):
+    class _LifecycleWorld:
+        def __init__(self):
+            self.candidates = {}
+            self.requisitions = {}
+            self.applications = {}
+            self.interviews = {}
+            self.scorecards = {}
+            self.feedback = {}
+            self.offers = {}
+            self.decisions = {}
+            self.activities = []
+            self.pipeline = server.Pipeline(
+                organization_id="org_alpha",
+                name="Enterprise standard",
+                stages=[
+                    server.PipelineStageDefinition(stage_id="applied", name="Applied", order=0, is_default=True),
+                    server.PipelineStageDefinition(stage_id="screened", name="Screened", order=1),
+                    server.PipelineStageDefinition(stage_id="interview", name="Interview", order=2),
+                    server.PipelineStageDefinition(stage_id="offer", name="Offer", order=3),
+                ],
+            )
+
+        async def upsert_candidate(self, candidate):
+            self.candidates[candidate.candidate_id] = candidate
+            return candidate
+
+        async def upsert_requisition(self, requisition):
+            self.requisitions[requisition.requisition_id] = requisition
+            return requisition
+
+        async def list_applications(self, organization_id, candidate_id=None, requisition_id=None, **_kwargs):
+            return [item for item in self.applications.values() if item.organization_id == organization_id and (not candidate_id or item.candidate_id == candidate_id) and (not requisition_id or item.requisition_id == requisition_id)]
+
+        async def upsert_application(self, application):
+            self.applications[application.application_id] = application
+            return application
+
+        async def get_application(self, organization_id, application_id):
+            item = self.applications.get(application_id)
+            return item if item and item.organization_id == organization_id else None
+
+        async def get_pipeline(self, organization_id, pipeline_id):
+            return self.pipeline if (organization_id, pipeline_id) == ("org_alpha", self.pipeline.pipeline_id) else None
+
+        async def upsert_interview(self, interview):
+            self.interviews[interview.interview_id] = interview
+            return interview
+
+        async def get_interview(self, organization_id, interview_id):
+            item = self.interviews.get(interview_id)
+            return item if item and item.organization_id == organization_id else None
+
+        async def upsert_scorecard(self, scorecard):
+            self.scorecards[scorecard.scorecard_id] = scorecard
+            return scorecard
+
+        async def get_scorecard(self, organization_id, scorecard_id):
+            item = self.scorecards.get(scorecard_id)
+            return item if item and item.organization_id == organization_id else None
+
+        async def upsert_interview_feedback(self, feedback):
+            self.feedback[feedback.feedback_id] = feedback
+            return feedback
+
+        async def upsert_offer(self, offer):
+            self.offers[offer.offer_id] = offer
+            return offer
+
+        async def list_hiring_decisions(self, organization_id, application_id=None, **_kwargs):
+            return [item for item in self.decisions.values() if item.organization_id == organization_id and (not application_id or item.application_id == application_id)]
+
+        async def create_hiring_decision(self, decision):
+            self.decisions[decision.hiring_decision_id] = decision
+            return decision
+
+        async def record_activity(self, activity):
+            self.activities.append(activity)
+            return activity
+
+    class _Governance:
+        def __init__(self):
+            self.approvals = []
+            self.events = []
+
+        async def request_approval(self, approval):
+            self.approvals.append(approval)
+            return approval
+
+        async def emit(self, event):
+            self.events.append(event)
+            return event
+
+    world = _LifecycleWorld()
+    governance = _Governance()
+    candidate = asyncio.run(world.upsert_candidate(Candidate(organization_id="org_alpha", full_name="Casey Candidate", email="casey@example.test")))
+    requisition = asyncio.run(world.upsert_requisition(Requisition(organization_id="org_alpha", title="Platform Engineer")))
+    job = SimpleNamespace(job_id="job_alpha", organization_id="org_alpha")
+
+    async def _candidate(candidate_id, _user):
+        return candidate if candidate_id == candidate.candidate_id else None
+
+    async def _requisition(requisition_id, _user):
+        return requisition if requisition_id == requisition.requisition_id else None
+
+    async def _job(job_id, _user):
+        return job if job_id == job.job_id else None
+
+    monkeypatch.setattr(server, "world", world)
+    monkeypatch.setattr(server, "governance", governance)
+    monkeypatch.setattr(server, "_scoped_candidate", _candidate)
+    monkeypatch.setattr(server, "_scoped_requisition", _requisition)
+    monkeypatch.setattr(server, "_scoped_job", _job)
+    recruiter = SimpleNamespace(user_id="recruiter_alpha", organization_id="org_alpha", role=Role.RECRUITER)
+
+    application = asyncio.run(server.create_ats_application(server.ApplicationCreateRequest(
+        candidate_id=candidate.candidate_id,
+        requisition_id=requisition.requisition_id,
+        job_id=job.job_id,
+        pipeline_id=world.pipeline.pipeline_id,
+        current_stage_id="applied",
+    ), recruiter))
+    for stage_id, stage_name in (("screened", "Screened"), ("interview", "Interview"), ("offer", "Offer")):
+        asyncio.run(server.move_ats_application_stage(application["application_id"], server.ApplicationStageRequest(stage_id=stage_id, stage_name=stage_name), recruiter))
+    interview = asyncio.run(server.create_ats_interview(server.InterviewCreateRequest(
+        application_id=application["application_id"], candidate_id=candidate.candidate_id, scheduled_at="2026-09-01T10:00:00+00:00"
+    ), recruiter))
+    scorecard = asyncio.run(server.create_ats_scorecard(server.ScorecardCreateRequest(
+        name="Platform engineering evidence", requisition_id=requisition.requisition_id, competencies=[{"name": "Systems judgment"}]
+    ), recruiter))
+    feedback = asyncio.run(server.create_ats_interview_feedback(interview["interview_id"], server.InterviewFeedbackCreateRequest(
+        scorecard_id=scorecard["scorecard_id"], recommendation="strong_yes", ratings={"Systems judgment": 4.0}
+    ), recruiter))
+    offer = asyncio.run(server.create_ats_offer_draft(server.OfferDraftCreateRequest(
+        candidate_id=candidate.candidate_id, job_id=job.job_id, base_salary=175000, currency="USD"
+    ), recruiter))
+    decision = asyncio.run(server.request_ats_hiring_decision(server.HiringDecisionCreateRequest(
+        application_id=application["application_id"], outcome="hire", rationale="Structured panel evidence supports a final hire decision."
+    ), recruiter))
+
+    persisted_application = world.applications[application["application_id"]]
+    assert persisted_application.current_stage_name == "Offer"
+    assert persisted_application.status is ApplicationStatus.ACTIVE
+    assert interview["application_id"] == application["application_id"]
+    assert feedback["interview_id"] == interview["interview_id"]
+    assert offer["status"] == "draft"
+    assert decision["status"] == "awaiting_approval"
+    assert len(governance.approvals) == 1
+    assert governance.approvals[0].requested_by == recruiter.user_id

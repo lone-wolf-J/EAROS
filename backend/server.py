@@ -104,6 +104,7 @@ from platform_core.world import (
     Interview,
     InterviewFeedback,
     NotificationPreference,
+    Offer,
     RecruiterAlert,
     OnboardingHandoff,
     Pipeline,
@@ -893,6 +894,47 @@ async def create_ats_application(req: ApplicationCreateRequest, user: AppUser = 
     return application.model_dump()
 
 
+class OfferDraftCreateRequest(BaseModel):
+    """Create an internal offer draft; approval and delivery are separate governed operations."""
+    candidate_id: str = Field(min_length=3, max_length=200)
+    job_id: str = Field(min_length=3, max_length=200)
+    base_salary: int = Field(ge=0, le=10_000_000)
+    bonus: int = Field(default=0, ge=0, le=10_000_000)
+    equity_units: int = Field(default=0, ge=0, le=10_000_000)
+    signing_bonus: int = Field(default=0, ge=0, le=10_000_000)
+    currency: str = Field(min_length=3, max_length=3, pattern="^[A-Z]{3}$")
+
+
+@app.get("/api/ats/offers")
+async def list_ats_offers(user: AppUser = Depends(_current_user)):
+    return [offer.model_dump() for offer in await world.list_offers(user.organization_id)]
+
+
+@app.post("/api/ats/offers")
+async def create_ats_offer_draft(req: OfferDraftCreateRequest, user: AppUser = Depends(_current_user)):
+    _require_role(user, Role.ADMIN, Role.RECRUITER)
+    await _scoped_candidate(req.candidate_id, user)
+    await _scoped_job(req.job_id, user)
+    offer = await world.upsert_offer(Offer(organization_id=user.organization_id, **req.model_dump()))
+    await governance.emit(DomainEvent(
+        event_type=EventType.OFFER_DRAFT_CREATED,
+        actor=f"user:{user.user_id}",
+        subject_type="offer",
+        subject_id=offer.offer_id,
+        organization_id=user.organization_id,
+        payload={"candidate_id": offer.candidate_id, "job_id": offer.job_id, "status": offer.status.value},
+    ))
+    await world.record_activity(ActivityRecord(
+        organization_id=user.organization_id,
+        entity_type="candidate",
+        entity_id=offer.candidate_id,
+        event_type="offer.draft_created",
+        actor_user_id=user.user_id,
+        payload={"offer_id": offer.offer_id, "job_id": offer.job_id, "status": offer.status.value},
+    ))
+    return offer.model_dump()
+
+
 def _career_site_requisition_is_open(requisition: Requisition) -> bool:
     """Public submissions require an explicitly enabled, open, non-archived requisition."""
     approval_status = getattr(requisition.approval_status, "value", requisition.approval_status)
@@ -1084,12 +1126,52 @@ class ApplicationStageRequest(BaseModel):
     reason: Optional[str] = Field(default=None, max_length=1000)
 
 
+_FALLBACK_ACTIVE_APPLICATION_STAGES = frozenset({"Applied", "Screened", "Interview", "Offer"})
+_TERMINAL_APPLICATION_STAGE_NAMES = frozenset({"Hired", "Rejected"})
+
+
+async def _validate_application_stage_transition(application: Application, req: ApplicationStageRequest) -> None:
+    """Allow only active pipeline movement; terminal outcomes require a governed hiring decision."""
+    application_status = getattr(application.status, "value", application.status)
+    if application_status != "active":
+        raise HTTPException(status_code=409, detail="Only active applications can move through the pipeline")
+    if req.stage_name in _TERMINAL_APPLICATION_STAGE_NAMES:
+        raise HTTPException(
+            status_code=409,
+            detail="Hired and Rejected outcomes require an approval-gated hiring decision",
+        )
+
+    if not application.pipeline_id:
+        if req.stage_name not in _FALLBACK_ACTIVE_APPLICATION_STAGES:
+            raise HTTPException(status_code=400, detail="Application stage is not part of the canonical active pipeline")
+        return
+
+    pipeline = await world.get_pipeline(application.organization_id, application.pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=409, detail="Application pipeline is unavailable")
+    matches = [
+        stage for stage in pipeline.stages
+        if (req.stage_id and stage.stage_id == req.stage_id) or (not req.stage_id and stage.name == req.stage_name)
+    ]
+    if len(matches) != 1:
+        raise HTTPException(status_code=400, detail="Application stage is not configured for this pipeline")
+    stage = matches[0]
+    if stage.name != req.stage_name:
+        raise HTTPException(status_code=400, detail="Application stage identifier and name do not match")
+    if stage.category.startswith("terminal_"):
+        raise HTTPException(
+            status_code=409,
+            detail="Terminal pipeline stages require an approval-gated hiring decision",
+        )
+
+
 @app.post("/api/ats/applications/{application_id}/stage")
 async def move_ats_application_stage(
     application_id: str, req: ApplicationStageRequest, user: AppUser = Depends(_current_user)
 ):
-    _require_role(user, Role.ADMIN, Role.RECRUITER, Role.HIRING_MANAGER)
+    _require_role(user, Role.ADMIN, Role.RECRUITER)
     application = await _scoped_application(application_id, user)
+    await _validate_application_stage_transition(application, req)
     previous_name = application.current_stage_name
     application.current_stage_id = req.stage_id
     application.current_stage_name = req.stage_name
