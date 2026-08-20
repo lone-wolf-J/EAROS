@@ -104,3 +104,7 @@ The following dependencies are intentionally not inferred, fabricated, or activa
 | Authenticated source-route workflow | Artifact and unauthenticated routing checks pass; no live identity/database service is attached to the isolated validation environment. | Release owner supplies a non-production tenant and authorized test identities to exercise sign-in, role mapping, tenant isolation, a governed approval, and a record-only offer workflow. | Evidence must be captured before production promotion; no authentication bypass is added for validation. |
 
 > These deferred dependencies do not weaken the governed runtime. In their absence, EAROS continues to deny or record-only sensitive actions rather than send, publish, decide, or restore automatically.
+
+### Current no-provider release decision
+
+The current EAROS release baseline has **no organization-owned email-delivery provider and no SSO identity provider**. Accordingly, candidate and recruiter notifications remain tenant-scoped, consent-aware **records without outbound delivery**, and SSO/SAML remains configuration-ready but inactive. This is an intentional fail-closed release posture, not an error state. Future activation requires the relevant organization owner to supply the inputs identified in the table above and to approve the controlled verification evidence.
