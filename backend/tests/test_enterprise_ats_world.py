@@ -18,13 +18,17 @@ from platform_core.world import (
     Application,
     Candidate,
     CandidateConsent,
+    HiringDecision,
     Interview,
+    InterviewFeedback,
     OnboardingHandoff,
+    Offer,
     Pipeline,
     PipelineStageDefinition,
     Requisition,
     ResumeDocument,
     RetentionCase,
+    Scorecard,
     WorldState,
 )
 
@@ -101,6 +105,58 @@ class _RetentionDatabase:
         self.candidates = _RetentionCollection(candidates)
         self.applications = _RetentionCollection(applications)
         self.retention_cases = _RetentionCollection(cases)
+
+
+class _LifecycleCursor:
+    def __init__(self, docs):
+        self.docs = docs
+
+    def sort(self, field, direction):
+        self.docs.sort(key=lambda doc: doc.get(field, ""), reverse=direction < 0)
+        return self
+
+    async def to_list(self, limit):
+        return [dict(doc) for doc in self.docs[:limit]]
+
+
+class _LifecycleCollection:
+    def __init__(self):
+        self.docs = []
+
+    @staticmethod
+    def _matches(document, query):
+        return all(document.get(key) == value for key, value in query.items())
+
+    async def insert_one(self, document):
+        self.docs.append(dict(document))
+
+    async def update_one(self, query, update, upsert=False):
+        document = next((doc for doc in self.docs if self._matches(doc, query)), None)
+        if document is None and upsert:
+            document = dict(query)
+            self.docs.append(document)
+        if document is None:
+            return type("Result", (), {"matched_count": 0})()
+        document.update(update.get("$set", {}))
+        for key, value in update.get("$push", {}).items():
+            document.setdefault(key, []).append(value)
+        return type("Result", (), {"matched_count": 1})()
+
+    def find(self, query, _projection=None):
+        return _LifecycleCursor([doc for doc in self.docs if self._matches(doc, query)])
+
+    async def find_one(self, query, _projection=None):
+        document = next((doc for doc in self.docs if self._matches(doc, query)), None)
+        return dict(document) if document else None
+
+
+class _LifecycleDatabase:
+    def __init__(self):
+        for collection_name in (
+            "candidates", "pipelines", "requisitions", "applications", "interviews",
+            "scorecards", "interview_feedback", "offers", "hiring_decisions",
+        ):
+            setattr(self, collection_name, _LifecycleCollection())
 
 
 def _candidate(organization_id: str, **overrides):
@@ -324,3 +380,80 @@ def test_retention_execution_blocks_legal_hold_and_wrong_tenant_access():
     with pytest.raises(ValueError, match="legal hold"):
         asyncio.run(world.execute_retention_case("org_a", held_case.retention_case_id, expected_action="erase"))
     assert asyncio.run(world.execute_retention_case("org_b", held_case.retention_case_id, expected_action="erase")) is None
+
+
+def test_persistence_backed_core_recruiting_lifecycle_remains_tenant_scoped_and_requires_independent_resolution():
+    database = _LifecycleDatabase()
+    world = WorldState(database)
+    pipeline = Pipeline(
+        organization_id="org_a",
+        name="Engineering lifecycle",
+        stages=[
+            PipelineStageDefinition(name="Applied", order=0, is_default=True),
+            PipelineStageDefinition(name="Screened", order=1),
+            PipelineStageDefinition(name="Interview", order=2),
+            PipelineStageDefinition(name="Offer", order=3),
+        ],
+    )
+    candidate = _candidate("org_a")
+    requisition = Requisition(
+        organization_id="org_a", title="Principal Engineer", job_id=candidate.job_id, pipeline_id=pipeline.pipeline_id
+    )
+    application = Application(
+        organization_id="org_a", candidate_id=candidate.candidate_id,
+        requisition_id=requisition.requisition_id, pipeline_id=pipeline.pipeline_id,
+        current_stage_id=pipeline.stages[0].stage_id, current_stage_name="Applied",
+    )
+    interview = Interview(
+        organization_id="org_a", application_id=application.application_id,
+        candidate_id=candidate.candidate_id, scheduled_at="2026-08-20T10:00:00+00:00",
+        interviewer_ids=["usr_manager"],
+    )
+    scorecard = Scorecard(
+        organization_id="org_a", requisition_id=requisition.requisition_id,
+        name="Engineering scorecard", competencies=[{"name": "Systems design", "weight": 1}],
+    )
+    feedback = InterviewFeedback(
+        organization_id="org_a", interview_id=interview.interview_id,
+        scorecard_id=scorecard.scorecard_id, interviewer_id="usr_manager",
+        recommendation="strong_yes", ratings={"systems_design": 5.0},
+    )
+    offer = Offer(
+        organization_id="org_a", candidate_id=candidate.candidate_id, job_id=candidate.job_id,
+        base_salary=180000, currency="USD",
+    )
+    decision = HiringDecision(
+        organization_id="org_a", application_id=application.application_id,
+        candidate_id=candidate.candidate_id, requisition_id=requisition.requisition_id,
+        outcome="hire", rationale="Interview evidence and scorecard support the hiring recommendation.",
+        requested_by_user_id="usr_recruiter", approval_id="apr_independent",
+    )
+
+    async def run_lifecycle():
+        await world.upsert_pipeline(pipeline)
+        await world.upsert_candidate(candidate)
+        await world.upsert_requisition(requisition)
+        await world.upsert_application(application)
+        await world.upsert_interview(interview)
+        await world.upsert_scorecard(scorecard)
+        await world.upsert_interview_feedback(feedback)
+        await world.upsert_offer(offer)
+        await world.create_hiring_decision(decision)
+        pre_resolution = await world.get_application("org_a", application.application_id)
+        assert pre_resolution and pre_resolution.status is ApplicationStatus.ACTIVE
+        resolved = await world.resolve_hiring_decision(
+            "org_a", decision.hiring_decision_id, approval_id="apr_independent",
+            status="effective", resolved_by_user_id="usr_admin",
+        )
+        applied = await world.apply_hiring_decision_application_status("org_a", resolved)
+        return resolved, applied
+
+    resolved, applied = asyncio.run(run_lifecycle())
+
+    assert resolved.status == "effective"
+    assert resolved.resolved_by_user_id == "usr_admin"
+    assert applied and applied.status is ApplicationStatus.HIRED
+    assert applied.stage_history[-1]["reason"] == "approved_hiring_decision"
+    assert len(database.interview_feedback.docs) == 1
+    assert len(database.offers.docs) == 1
+    assert asyncio.run(world.get_application("org_b", application.application_id)) is None
