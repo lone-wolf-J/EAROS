@@ -9,7 +9,10 @@ const rootDir = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "VITE_");
   if (mode === "production") {
-    resolveBackendUrl(env.VITE_BACKEND_URL, { production: true });
+    resolveBackendUrl(env.VITE_BACKEND_URL, {
+      production: true,
+      allowInsecureLocalhost: env.VITE_EAROS_ALLOW_INSECURE_LOCAL_SMOKE === "true",
+    });
   }
 
   return {

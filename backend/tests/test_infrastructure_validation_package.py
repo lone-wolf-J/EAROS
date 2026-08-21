@@ -155,6 +155,7 @@ def test_authenticated_browser_smoke_remains_disposable_and_exercises_compiled_r
     assert 'path: "/ats/workflows"' in browser_test
     assert 'path: "/interview"' in browser_test
     assert "VITE_BACKEND_URL: http://127.0.0.1:18000" in auth_compose
+    assert 'VITE_EAROS_ALLOW_INSECURE_LOCAL_SMOKE: "true"' in auth_compose
     assert "run-infrastructure-browser-smoke.sh" in workflow
     assert "npx playwright install --with-deps chromium" in workflow
 

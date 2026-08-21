@@ -38,6 +38,6 @@ describe("EAROS Vite client ownership", () => {
     const viteConfig = readFrontendFile("vite.config.mjs");
 
     expect(viteConfig).toContain('import { defineConfig, loadEnv } from "vite";');
-    expect(viteConfig).toContain('resolveBackendUrl(env.VITE_BACKEND_URL, { production: true });');
+    expect(viteConfig).toContain("allowInsecureLocalhost: env.VITE_EAROS_ALLOW_INSECURE_LOCAL_SMOKE === \"true\"");
   });
 });

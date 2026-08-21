@@ -1,4 +1,4 @@
-export function resolveBackendUrl(value, { production = false } = {}) {
+export function resolveBackendUrl(value, { production = false, allowInsecureLocalhost = false } = {}) {
   const candidate = (value || "").trim();
   if (!candidate) {
     if (production) {
@@ -23,7 +23,8 @@ export function resolveBackendUrl(value, { production = false } = {}) {
   if (parsed.pathname !== "/" || parsed.search || parsed.hash) {
     throw new Error("VITE_BACKEND_URL must be an origin only; paths, queries, and fragments are not permitted.");
   }
-  if (production && parsed.protocol !== "https:") {
+  const isLoopback = ["127.0.0.1", "localhost", "::1"].includes(parsed.hostname);
+  if (production && parsed.protocol !== "https:" && !(allowInsecureLocalhost && isLoopback)) {
     throw new Error("VITE_BACKEND_URL must use HTTPS for an EAROS production client build.");
   }
 
