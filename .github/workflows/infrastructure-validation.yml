@@ -53,7 +53,7 @@ jobs:
         run: PYTHONPATH=. pytest -q tests/test_infrastructure_validation_package.py tests/test_production_security_contract.py
 
   staging-compose-runtime:
-    name: Protected staging Compose runtime
+    name: Manual staging Compose runtime
     if: github.event_name == 'workflow_dispatch' && inputs.run_runtime == true
     needs: package-contracts
     runs-on: ubuntu-latest

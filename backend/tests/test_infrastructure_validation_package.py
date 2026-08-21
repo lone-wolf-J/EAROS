@@ -79,7 +79,7 @@ def test_compose_harness_is_syntax_valid_and_cleans_up_its_stack() -> None:
     assert "validate-infrastructure.mjs --runtime" in harness
 
 
-def test_protected_ci_workflow_keeps_runtime_execution_manual_and_secret_backed() -> None:
+def test_ci_workflow_keeps_runtime_execution_manual_and_secret_backed() -> None:
     workflow = (REPOSITORY_ROOT / ".github/workflows/infrastructure-validation.yml").read_text(encoding="utf8")
 
     assert "workflow_dispatch:" in workflow

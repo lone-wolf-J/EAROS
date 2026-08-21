@@ -50,14 +50,14 @@ node scripts/verify-backup-evidence.mjs /secure/path/backup-restore-evidence.jso
 
 ## Docker-capable validation options
 
-The repository includes a protected manual workflow at `.github/workflows/infrastructure-validation.yml`. It always checks the validation package on relevant changes. Its Docker runtime job runs only when a maintainer manually selects `run_runtime=true` and the protected `earos-staging` environment approves the execution.
+The repository includes a manual workflow at `.github/workflows/infrastructure-validation.yml`. It always checks the validation package on relevant changes. Its Docker runtime job runs only when a maintainer manually selects `run_runtime=true`; it reads non-production values only from the dedicated `earos-staging` environment.
 
 | Approach | Tradeoffs | Cost | Setup complexity |
 | --- | --- | --- | --- |
 | Run on your staging host | The nearest match to the eventual deployment; the database and identity endpoint can remain inside your private network. | Uses your existing staging host. | Copy the two templates, create the non-production records, and run one command. |
-| Run the protected repository workflow | Uses a temporary Docker-capable runner and retains the workflow log as evidence; the staging database must be reachable from that runner. | Uses your repository’s CI allowance. | Create the protected `earos-staging` environment and add the two multiline secrets below. |
+| Run the manual repository workflow | Uses a temporary Docker-capable runner and retains the workflow log as evidence; the staging database must be reachable from that runner. | Uses your repository’s CI allowance. | Add the two multiline secrets to the dedicated `earos-staging` environment, then manually run the workflow. |
 
-For the protected workflow, add these **environment secrets**, never repository variables or source files:
+For the manual workflow, add these **environment secrets**, never repository variables or source files:
 
 | Secret | Contents |
 | --- | --- |
