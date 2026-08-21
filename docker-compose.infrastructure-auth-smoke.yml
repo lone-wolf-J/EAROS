@@ -10,5 +10,7 @@ services:
   web:
     build:
       args:
-        VITE_BACKEND_URL: http://127.0.0.1:18000
+        VITE_BACKEND_URL: http://127.0.0.1:18080
         VITE_EAROS_ALLOW_INSECURE_LOCAL_SMOKE: "true"
+    volumes:
+      - ./frontend/nginx.infrastructure-auth-smoke.conf:/etc/nginx/conf.d/default.conf:ro

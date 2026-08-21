@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
-const apiBase = process.env.EAROS_BROWSER_API_BASE || "http://127.0.0.1:18000";
 const webBase = process.env.EAROS_BROWSER_WEB_BASE || "http://127.0.0.1:18080";
+const apiBase = process.env.EAROS_BROWSER_API_BASE || webBase;
 const screenshotDir = process.env.EAROS_BROWSER_SMOKE_OUTPUT || "/tmp/earos-infrastructure-browser-smoke";
 
 const routes = [

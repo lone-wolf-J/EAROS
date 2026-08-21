@@ -21,7 +21,7 @@ curl --fail --silent --show-error \
 
 pushd "$ROOT_DIR/frontend" > /dev/null
 npx playwright install chromium
-EAROS_BROWSER_API_BASE=http://127.0.0.1:18000 \
+EAROS_BROWSER_API_BASE=http://127.0.0.1:18080 \
 EAROS_BROWSER_WEB_BASE=http://127.0.0.1:18080 \
 EAROS_BROWSER_SMOKE_OUTPUT="$SMOKE_OUTPUT" \
 yarn test:browser-smoke

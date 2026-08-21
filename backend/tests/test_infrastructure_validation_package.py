@@ -149,13 +149,14 @@ def test_authenticated_browser_smoke_remains_disposable_and_exercises_compiled_r
     assert "earos-infrastructure-browser-smoke" in browser_harness
     assert "trap cleanup EXIT" in browser_harness
     assert "yarn test:browser-smoke" in browser_harness
-    assert "EAROS_BROWSER_API_BASE=http://127.0.0.1:18000" in browser_harness
+    assert "EAROS_BROWSER_API_BASE=http://127.0.0.1:18080" in browser_harness
     assert "synthetic recruiter can load compiled protected recruiter workflows" in browser_test
     assert 'path: "/ats"' in browser_test
     assert 'path: "/ats/workflows"' in browser_test
     assert 'path: "/interview"' in browser_test
-    assert "VITE_BACKEND_URL: http://127.0.0.1:18000" in auth_compose
+    assert "VITE_BACKEND_URL: http://127.0.0.1:18080" in auth_compose
     assert 'VITE_EAROS_ALLOW_INSECURE_LOCAL_SMOKE: "true"' in auth_compose
+    assert "nginx.infrastructure-auth-smoke.conf:/etc/nginx/conf.d/default.conf:ro" in auth_compose
     assert "run-infrastructure-browser-smoke.sh" in workflow
     assert "npx playwright install --with-deps chromium" in workflow
 
