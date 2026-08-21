@@ -5,6 +5,7 @@ export { resolveBackendUrl } from "./backendUrl";
 
 const BACKEND_URL = resolveBackendUrl(import.meta.env.VITE_BACKEND_URL, {
   production: import.meta.env.PROD,
+  allowInsecureLocalhost: import.meta.env.VITE_EAROS_ALLOW_INSECURE_LOCAL_SMOKE === "true",
 });
 
 export const API = `${BACKEND_URL}/api`;

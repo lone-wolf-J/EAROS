@@ -36,8 +36,10 @@ describe("EAROS Vite client ownership", () => {
 
   it("fails closed on unsafe production API-origin configuration before bundling", () => {
     const viteConfig = readFrontendFile("vite.config.mjs");
+    const apiClient = readFrontendFile("src/lib/api.js");
 
     expect(viteConfig).toContain('import { defineConfig, loadEnv } from "vite";');
     expect(viteConfig).toContain("allowInsecureLocalhost: env.VITE_EAROS_ALLOW_INSECURE_LOCAL_SMOKE === \"true\"");
+    expect(apiClient).toContain('allowInsecureLocalhost: import.meta.env.VITE_EAROS_ALLOW_INSECURE_LOCAL_SMOKE === "true"');
   });
 });

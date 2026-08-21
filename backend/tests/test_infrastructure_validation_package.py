@@ -156,9 +156,10 @@ def test_authenticated_browser_smoke_remains_disposable_and_exercises_compiled_r
     assert 'credentials: "include"' in browser_test
     assert "expect(loginStatus).toBe(200)" in browser_test
     assert 'await page.reload({ waitUntil: "domcontentloaded" })' in browser_test
-    assert 'path: "/ats"' in browser_test
-    assert 'path: "/ats/workflows"' in browser_test
-    assert 'path: "/interview"' in browser_test
+    assert 'path: "/ats", rootTestId: "ats-operations-root"' in browser_test
+    assert 'path: "/ats/workflows", rootTestId: "ats-autonomy-root"' in browser_test
+    assert 'path: "/interview", rootTestId: "interview-suite-root"' in browser_test
+    assert "getByTestId(route.rootTestId)).toBeVisible" in browser_test
     assert "VITE_BACKEND_URL: http://127.0.0.1:18080" in auth_compose
     assert 'VITE_EAROS_ALLOW_INSECURE_LOCAL_SMOKE: "true"' in auth_compose
     assert "nginx.infrastructure-auth-smoke.conf:/etc/nginx/conf.d/default.conf:ro" in auth_compose
