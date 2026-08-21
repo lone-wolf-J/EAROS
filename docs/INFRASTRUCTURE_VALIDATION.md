@@ -56,6 +56,8 @@ The same workflow also runs `scripts/run-infrastructure-smoke.sh` on a hosted Do
 
 It then runs `scripts/run-infrastructure-auth-smoke.sh` against a distinct disposable Compose project. That project explicitly uses `EAROS_ENV=development`, enables the development-only login and bootstrap endpoints, and uses an ephemeral MongoDB volume. The script provisions only the seeded synthetic recruiter, verifies the authenticated tenant identity, and performs read-only requisition, candidate, pipeline, offer, and interview checks. This job validates the approved pseudo-login path without enabling it in the production smoke stack or substituting it for SSO validation.
 
+The self-contained API, MongoDB, Nginx, compiled-route, and authenticated-read smoke suite passed on the hosted runner for commit `b31d63b` ([run 32435607511](https://github.com/lone-wolf-J/EAROS/actions/runs/32435607511)). This is reproducibility evidence for the container images and disposable synthetic environment; it is not evidence that any organization-owned email, SSO, backup, or production identity provider has been activated.
+
 The API’s optional `emergentintegrations` client is intentionally not part of the required container dependency set because it is unavailable from the public Python package index. EAROS imports it dynamically only for optional model-backed planning and intake; when it is unavailable, the governed planner and intake path use their deterministic fallback behavior. A production deployment that has an approved internal package source may install that enhancement separately after the base image, but it must not weaken the self-contained operational baseline.
 
 | Approach | Tradeoffs | Cost | Setup complexity |
