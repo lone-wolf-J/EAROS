@@ -46,5 +46,9 @@ export default defineConfig(({ mode }) => {
     outDir: "dist",
     emptyOutDir: true,
   },
+  test: {
+    include: ["src/**/*.{test,spec}.{js,jsx}"],
+    exclude: ["e2e/**"],
+  },
 };
 });

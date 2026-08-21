@@ -144,6 +144,7 @@ def test_authenticated_browser_smoke_remains_disposable_and_exercises_compiled_r
     browser_harness = (REPOSITORY_ROOT / "scripts" / "run-infrastructure-browser-smoke.sh").read_text(encoding="utf8")
     browser_test = (REPOSITORY_ROOT / "frontend" / "e2e" / "authenticated-smoke.spec.mjs").read_text(encoding="utf8")
     auth_compose = (REPOSITORY_ROOT / "docker-compose.infrastructure-auth-smoke.yml").read_text(encoding="utf8")
+    vite_config = (REPOSITORY_ROOT / "frontend" / "vite.config.mjs").read_text(encoding="utf8")
     workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "infrastructure-validation.yml").read_text(encoding="utf8")
 
     assert "earos-infrastructure-browser-smoke" in browser_harness
@@ -161,6 +162,8 @@ def test_authenticated_browser_smoke_remains_disposable_and_exercises_compiled_r
     assert "VITE_BACKEND_URL: http://127.0.0.1:18080" in auth_compose
     assert 'VITE_EAROS_ALLOW_INSECURE_LOCAL_SMOKE: "true"' in auth_compose
     assert "nginx.infrastructure-auth-smoke.conf:/etc/nginx/conf.d/default.conf:ro" in auth_compose
+    assert 'include: ["src/**/*.{test,spec}.{js,jsx}"]' in vite_config
+    assert 'exclude: ["e2e/**"]' in vite_config
     assert "run-infrastructure-browser-smoke.sh" in workflow
     assert "npx playwright install --with-deps chromium" in workflow
 
