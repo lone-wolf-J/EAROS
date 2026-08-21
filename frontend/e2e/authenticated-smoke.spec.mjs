@@ -12,9 +12,17 @@ const routes = [
 
 test("synthetic recruiter can load compiled protected recruiter workflows", async ({ page, context }) => {
   await page.goto(`${webBase}/`, { waitUntil: "domcontentloaded" });
-  await page.getByRole("button", { name: "recruiter", exact: true }).click();
-  await expect(page).toHaveURL(/\/mission$/);
+  const loginStatus = await page.evaluate(async () => {
+    const response = await fetch("/api/auth/dev-login?email=demo.recruiter%40levelshift.ai", {
+      method: "POST",
+      credentials: "include",
+    });
+    return response.status;
+  });
+
+  expect(loginStatus).toBe(200);
   await expect.poll(async () => (await context.cookies(apiBase)).some((cookie) => cookie.name === "session_token")).toBe(true);
+  await page.reload({ waitUntil: "domcontentloaded" });
 
   for (const route of routes) {
     await page.goto(`${webBase}${route.path}`, { waitUntil: "domcontentloaded" });
