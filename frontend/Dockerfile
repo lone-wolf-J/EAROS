@@ -2,7 +2,9 @@
 FROM node:22-alpine AS build
 WORKDIR /app
 ARG VITE_BACKEND_URL
+ARG VITE_EAROS_ALLOW_INSECURE_LOCAL_SMOKE
 ENV VITE_BACKEND_URL=${VITE_BACKEND_URL}
+ENV VITE_EAROS_ALLOW_INSECURE_LOCAL_SMOKE=${VITE_EAROS_ALLOW_INSECURE_LOCAL_SMOKE}
 COPY package.json yarn.lock ./
 RUN corepack enable && yarn install --frozen-lockfile --ignore-engines --production=false
 COPY . .

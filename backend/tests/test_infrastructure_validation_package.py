@@ -182,4 +182,6 @@ def test_frontend_container_installs_build_tooling_before_production_runtime() -
     dockerfile = (REPOSITORY_ROOT / "frontend" / "Dockerfile").read_text(encoding="utf8")
 
     assert "yarn install --frozen-lockfile --ignore-engines --production=false" in dockerfile
+    assert "ARG VITE_EAROS_ALLOW_INSECURE_LOCAL_SMOKE" in dockerfile
+    assert "ENV VITE_EAROS_ALLOW_INSECURE_LOCAL_SMOKE=${VITE_EAROS_ALLOW_INSECURE_LOCAL_SMOKE}" in dockerfile
     assert "FROM nginx:1.27-alpine\nENV NODE_ENV=production" in dockerfile
