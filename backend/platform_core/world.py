@@ -32,9 +32,11 @@ from foundation import (
     new_candidate_tag_id,
     new_candidate_notification_delivery_id,
     new_communication_id,
+    new_communication_template_id,
     new_consent_id,
     new_data_subject_request_id,
     new_department_id,
+    new_disposition_reason_id,
     new_feedback_id,
     new_hiring_decision_id,
     new_interview_id,
@@ -181,6 +183,7 @@ class Requisition(BaseModel):
     external_publication_targets: list[str] = Field(default_factory=list)
     career_site_enabled: bool = False
     referral_intake_enabled: bool = False
+    application_questions: list[dict[str, Any]] = Field(default_factory=list)
     created_by_user_id: Optional[str] = None
     created_at: str = Field(default_factory=utcnow_iso)
     updated_at: str = Field(default_factory=utcnow_iso)
@@ -300,6 +303,7 @@ class Application(BaseModel):
     fit_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     score_summary: Optional[str] = None
     skill_gaps: list[str] = Field(default_factory=list)
+    application_answers: list[dict[str, Any]] = Field(default_factory=list)
     stage_history: list[dict[str, Any]] = Field(default_factory=list)
     applied_at: str = Field(default_factory=utcnow_iso)
     created_at: str = Field(default_factory=utcnow_iso)
@@ -319,6 +323,8 @@ class HiringDecision(BaseModel):
     requisition_id: Optional[str] = None
     outcome: str = Field(pattern="^(hire|reject)$")
     rationale: str = Field(min_length=10, max_length=10_000)
+    disposition_reason_code: Optional[str] = None
+    disposition_reason_label: Optional[str] = None
     requested_by_user_id: str
     approval_id: Optional[str] = None
     status: str = "awaiting_approval"  # awaiting_approval | effective | denied
@@ -458,6 +464,36 @@ class CandidateCommunication(BaseModel):
     consent_id: Optional[str] = None
     recorded_by_user_id: Optional[str] = None
     created_at: str = Field(default_factory=utcnow_iso)
+
+
+class DispositionReason(BaseModel):
+    """Organization-owned outcome taxonomy; a code is stable for analytics and exports."""
+    model_config = ConfigDict(extra="ignore")
+    disposition_reason_id: str = Field(default_factory=new_disposition_reason_id)
+    organization_id: str
+    code: str
+    label: str
+    category: str = "rejected"
+    is_active: bool = True
+    created_by_user_id: Optional[str] = None
+    created_at: str = Field(default_factory=utcnow_iso)
+    updated_at: str = Field(default_factory=utcnow_iso)
+
+
+class CandidateCommunicationTemplate(BaseModel):
+    """Reusable reviewed content. A template never implies an outbound provider send."""
+    model_config = ConfigDict(extra="ignore")
+    communication_template_id: str = Field(default_factory=new_communication_template_id)
+    organization_id: str
+    name: str
+    channel: str
+    subject: Optional[str] = None
+    body: str
+    stage_name: Optional[str] = None
+    is_active: bool = True
+    created_by_user_id: Optional[str] = None
+    created_at: str = Field(default_factory=utcnow_iso)
+    updated_at: str = Field(default_factory=utcnow_iso)
 
 
 class ActivityRecord(BaseModel):
@@ -972,6 +1008,49 @@ class WorldState:
             query["archived_at"] = None
         docs = await self.db.applications.find(query, {"_id": 0}).sort("created_at", -1).to_list(5000)
         return [Application(**doc) for doc in docs]
+
+    async def upsert_disposition_reason(self, reason: DispositionReason) -> DispositionReason:
+        reason.updated_at = utcnow_iso()
+        await self.db.disposition_reasons.update_one(
+            {"organization_id": reason.organization_id, "code": reason.code},
+            {"$set": reason.model_dump()}, upsert=True,
+        )
+        return reason
+
+    async def get_disposition_reason(self, organization_id: str, code: str) -> Optional[DispositionReason]:
+        doc = await self.db.disposition_reasons.find_one(
+            {"organization_id": organization_id, "code": code}, {"_id": 0}
+        )
+        return DispositionReason(**doc) if doc else None
+
+    async def list_disposition_reasons(self, organization_id: str, *, active_only: bool = True) -> list[DispositionReason]:
+        query: dict[str, Any] = {"organization_id": organization_id}
+        if active_only:
+            query["is_active"] = True
+        docs = await self.db.disposition_reasons.find(query, {"_id": 0}).sort("label", 1).to_list(500)
+        return [DispositionReason(**doc) for doc in docs]
+
+    # organization-owned disposition taxonomy
+    async def upsert_disposition_reason(self, reason: DispositionReason) -> DispositionReason:
+        reason.updated_at = utcnow_iso()
+        await self.db.disposition_reasons.update_one(
+            {"organization_id": reason.organization_id, "code": reason.code},
+            {"$set": reason.model_dump()}, upsert=True,
+        )
+        return reason
+
+    async def get_disposition_reason(self, organization_id: str, code: str) -> Optional[DispositionReason]:
+        doc = await self.db.disposition_reasons.find_one(
+            {"organization_id": organization_id, "code": code}, {"_id": 0}
+        )
+        return DispositionReason(**doc) if doc else None
+
+    async def list_disposition_reasons(self, organization_id: str, *, active_only: bool = True) -> list[DispositionReason]:
+        query: dict[str, Any] = {"organization_id": organization_id}
+        if active_only:
+            query["is_active"] = True
+        docs = await self.db.disposition_reasons.find(query, {"_id": 0}).sort("label", 1).to_list(500)
+        return [DispositionReason(**doc) for doc in docs]
 
     # final hiring outcomes — a decision becomes effective only from the approval route
     async def create_hiring_decision(self, decision: HiringDecision) -> HiringDecision:
@@ -1512,3 +1591,34 @@ class WorldState:
             {"organization_id": organization_id}, {"_id": 0}
         ).to_list(500)
         return [Offer(**d) for d in docs]
+
+    async def upsert_communication_template(self, template: CandidateCommunicationTemplate) -> CandidateCommunicationTemplate:
+        template.updated_at = utcnow_iso()
+        await self.db.communication_templates.update_one(
+            {"organization_id": template.organization_id, "communication_template_id": template.communication_template_id},
+            {"$set": template.model_dump()}, upsert=True,
+        )
+        return template
+
+    async def list_communication_templates(self, organization_id: str, *, active_only: bool = True) -> list[CandidateCommunicationTemplate]:
+        query: dict[str, Any] = {"organization_id": organization_id}
+        if active_only:
+            query["is_active"] = True
+        docs = await self.db.communication_templates.find(query, {"_id": 0}).sort("name", 1).to_list(500)
+        return [CandidateCommunicationTemplate(**doc) for doc in docs]
+
+    # governed reusable communication content
+    async def upsert_communication_template(self, template: CandidateCommunicationTemplate) -> CandidateCommunicationTemplate:
+        template.updated_at = utcnow_iso()
+        await self.db.communication_templates.update_one(
+            {"organization_id": template.organization_id, "communication_template_id": template.communication_template_id},
+            {"$set": template.model_dump()}, upsert=True,
+        )
+        return template
+
+    async def list_communication_templates(self, organization_id: str, *, active_only: bool = True) -> list[CandidateCommunicationTemplate]:
+        query: dict[str, Any] = {"organization_id": organization_id}
+        if active_only:
+            query["is_active"] = True
+        docs = await self.db.communication_templates.find(query, {"_id": 0}).sort("name", 1).to_list(500)
+        return [CandidateCommunicationTemplate(**doc) for doc in docs]

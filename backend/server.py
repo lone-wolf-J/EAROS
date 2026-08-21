@@ -97,9 +97,11 @@ from platform_core.world import (
     CandidateNotificationDelivery,
     CandidateTag,
     CandidateCommunication,
+    CandidateCommunicationTemplate,
     CandidateConsent,
     CollaborationMention,
     DataSubjectRequest,
+    DispositionReason,
     HiringDecision,
     Interview,
     InterviewFeedback,
@@ -826,6 +828,7 @@ class CareerSiteApplicationRequest(BaseModel):
     years_experience: float = Field(default=0, ge=0, le=100)
     skills: list[str] = Field(default_factory=list, max_length=250)
     consent_to_recruit: bool = False
+    application_answers: list[dict[str, Any]] = Field(default_factory=list, max_length=40)
 
 
 class ReferralIntakeRequest(BaseModel):
@@ -840,6 +843,24 @@ class ReferralIntakeRequest(BaseModel):
     skills: list[str] = Field(default_factory=list, max_length=250)
     referrer_user_id: str = Field(min_length=3, max_length=200)
     note: Optional[str] = Field(default=None, max_length=2000)
+
+
+class ApplicationQuestionsConfigureRequest(BaseModel):
+    questions: list[dict[str, Any]] = Field(default_factory=list, max_length=40)
+
+
+class DispositionReasonCreateRequest(BaseModel):
+    code: str = Field(min_length=2, max_length=80, pattern="^[a-z0-9][a-z0-9_-]*$")
+    label: str = Field(min_length=2, max_length=160)
+    category: str = Field(default="rejected", min_length=2, max_length=80)
+
+
+class CommunicationTemplateCreateRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=160)
+    channel: str = Field(default="email", min_length=2, max_length=40)
+    subject: Optional[str] = Field(default=None, max_length=300)
+    body: str = Field(min_length=2, max_length=20_000)
+    stage_name: Optional[str] = Field(default=None, max_length=120)
 
 
 @app.get("/api/ats/applications")
@@ -894,6 +915,123 @@ async def create_ats_application(req: ApplicationCreateRequest, user: AppUser = 
     return application.model_dump()
 
 
+def _normalized_application_questions(questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    allowed_types = {"text", "textarea", "single_select", "multi_select", "boolean"}
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, raw in enumerate(questions):
+        question_id = str(raw.get("question_id", "")).strip()
+        label = str(raw.get("label", "")).strip()
+        question_type = str(raw.get("type", "text")).strip()
+        if not question_id or not question_id.replace("_", "").replace("-", "").isalnum() or question_id in seen:
+            raise HTTPException(status_code=422, detail=f"Question {index + 1} needs a unique alphanumeric identifier")
+        if not label or len(label) > 300 or question_type not in allowed_types:
+            raise HTTPException(status_code=422, detail=f"Question {index + 1} has invalid label or type")
+        options = raw.get("options", [])
+        if not isinstance(options, list) or any(not isinstance(option, str) or not option.strip() for option in options):
+            raise HTTPException(status_code=422, detail=f"Question {index + 1} has invalid options")
+        if question_type in {"single_select", "multi_select"} and not options:
+            raise HTTPException(status_code=422, detail=f"Question {index + 1} needs choices")
+        if question_type not in {"single_select", "multi_select"} and options:
+            raise HTTPException(status_code=422, detail=f"Question {index + 1} cannot include choices")
+        seen.add(question_id)
+        normalized.append({
+            "question_id": question_id, "label": label, "type": question_type,
+            "required": bool(raw.get("required", False)), "options": [option.strip() for option in options],
+        })
+    return normalized
+
+
+@app.put("/api/ats/requisitions/{requisition_id}/application-questions")
+async def configure_ats_application_questions(
+    requisition_id: str, req: ApplicationQuestionsConfigureRequest, user: AppUser = Depends(_current_user)
+):
+    _require_role(user, Role.ADMIN, Role.RECRUITER)
+    requisition = await _scoped_requisition(requisition_id, user)
+    if await world.list_applications(user.organization_id, requisition_id=requisition_id):
+        raise HTTPException(status_code=409, detail="Application questions cannot change after applications are received")
+    requisition.application_questions = _normalized_application_questions(req.questions)
+    requisition.updated_at = utcnow_iso()
+    await world.upsert_requisition(requisition)
+    await governance.emit(DomainEvent(
+        event_type=EventType.APPLICATION_QUESTIONS_CONFIGURED, actor=f"user:{user.user_id}",
+        subject_type="requisition", subject_id=requisition_id, organization_id=user.organization_id,
+        payload={"question_count": len(requisition.application_questions)},
+    ))
+    await world.record_activity(ActivityRecord(
+        organization_id=user.organization_id, entity_type="requisition", entity_id=requisition_id,
+        event_type="requisition.application_questions_configured", actor_user_id=user.user_id,
+        payload={"question_count": len(requisition.application_questions)},
+    ))
+    return {"requisition_id": requisition_id, "application_questions": requisition.application_questions}
+
+
+@app.get("/api/ats/disposition-reasons")
+async def list_ats_disposition_reasons(user: AppUser = Depends(_current_user)):
+    _require_role(user, Role.ADMIN, Role.RECRUITER, Role.HIRING_MANAGER)
+    return [reason.model_dump() for reason in await world.list_disposition_reasons(user.organization_id)]
+
+
+@app.post("/api/ats/disposition-reasons", status_code=201)
+async def create_ats_disposition_reason(req: DispositionReasonCreateRequest, user: AppUser = Depends(_current_user)):
+    _require_role(user, Role.ADMIN)
+    if await world.get_disposition_reason(user.organization_id, req.code):
+        raise HTTPException(status_code=409, detail="A disposition reason already uses this code")
+    reason = await world.upsert_disposition_reason(DispositionReason(
+        organization_id=user.organization_id, code=req.code, label=req.label, category=req.category,
+        created_by_user_id=user.user_id,
+    ))
+    await governance.emit(DomainEvent(
+        event_type=EventType.DISPOSITION_REASON_CONFIGURED, actor=f"user:{user.user_id}",
+        subject_type="disposition_reason", subject_id=reason.disposition_reason_id,
+        organization_id=user.organization_id, payload={"code": reason.code, "category": reason.category},
+    ))
+    return reason.model_dump()
+
+
+@app.get("/api/ats/communication-templates")
+async def list_ats_communication_templates(user: AppUser = Depends(_current_user)):
+    _require_role(user, Role.ADMIN, Role.RECRUITER, Role.HIRING_MANAGER)
+    return [template.model_dump() for template in await world.list_communication_templates(user.organization_id)]
+
+
+@app.post("/api/ats/communication-templates", status_code=201)
+async def create_ats_communication_template(req: CommunicationTemplateCreateRequest, user: AppUser = Depends(_current_user)):
+    _require_role(user, Role.ADMIN, Role.RECRUITER)
+    template = await world.upsert_communication_template(CandidateCommunicationTemplate(
+        organization_id=user.organization_id, name=req.name, channel=req.channel, subject=req.subject,
+        body=req.body, stage_name=req.stage_name, created_by_user_id=user.user_id,
+    ))
+    await governance.emit(DomainEvent(
+        event_type=EventType.COMMUNICATION_TEMPLATE_CREATED, actor=f"user:{user.user_id}",
+        subject_type="communication_template", subject_id=template.communication_template_id,
+        organization_id=user.organization_id, payload={"channel": template.channel, "stage_name": template.stage_name},
+    ))
+    return {**template.model_dump(), "delivery_state": "record_only_provider_not_configured"}
+
+
+@app.get("/api/ats/analytics/source-performance")
+async def get_ats_source_performance(user: AppUser = Depends(_current_user)):
+    _require_role(user, Role.ADMIN, Role.RECRUITER, Role.HIRING_MANAGER)
+    applications = await world.list_applications(user.organization_id)
+    candidates = {candidate.candidate_id: candidate for candidate in await world.list_candidates(user.organization_id)}
+    summary: dict[str, dict[str, Any]] = {}
+    for application in applications:
+        candidate = candidates.get(application.candidate_id)
+        source = application.source or (candidate.source if candidate else "unknown")
+        bucket = summary.setdefault(source, {"source": source, "applications": 0, "active": 0, "hired": 0, "rejected": 0})
+        bucket["applications"] += 1
+        stage = application.current_stage_name.strip().lower()
+        status = getattr(application.status, "value", application.status)
+        if stage == "hired" or status == "hired":
+            bucket["hired"] += 1
+        elif stage == "rejected" or status == "rejected":
+            bucket["rejected"] += 1
+        else:
+            bucket["active"] += 1
+    return {"organization_id": user.organization_id, "sources": sorted(summary.values(), key=lambda item: (-item["applications"], item["source"]))}
+
+
 class OfferDraftCreateRequest(BaseModel):
     """Create an internal offer draft; approval and delivery are separate governed operations."""
     candidate_id: str = Field(min_length=3, max_length=200)
@@ -946,6 +1084,34 @@ def _career_site_requisition_is_open(requisition: Requisition) -> bool:
     )
 
 
+def _validated_application_answers(questions: list[dict[str, Any]], answers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep public answers constrained to the requisition-owned question set."""
+    configured = {str(question.get("question_id")): question for question in questions if question.get("question_id")}
+    supplied: dict[str, Any] = {}
+    for answer in answers:
+        question_id = str(answer.get("question_id", "")).strip()
+        if not question_id or question_id not in configured or question_id in supplied:
+            raise HTTPException(status_code=400, detail="Application answer references an unavailable or duplicate question")
+        value = answer.get("value")
+        if isinstance(value, str):
+            value = value.strip()
+        if value is not None and not isinstance(value, (str, int, float, bool, list)):
+            raise HTTPException(status_code=400, detail="Application answer has an unsupported value type")
+        if isinstance(value, list) and any(not isinstance(item, str) for item in value):
+            raise HTTPException(status_code=400, detail="Application multi-select answers must contain strings")
+        supplied[question_id] = value
+    for question_id, question in configured.items():
+        value = supplied.get(question_id)
+        if question.get("required") and (value is None or value == "" or value == []):
+            raise HTTPException(status_code=422, detail=f"Answer required for: {question.get('label', question_id)}")
+        options = [str(option) for option in question.get("options", [])]
+        values = value if isinstance(value, list) else [value]
+        if options and value is not None and any(str(item) not in options for item in values):
+            raise HTTPException(status_code=400, detail=f"Application answer is not permitted for: {question.get('label', question_id)}")
+    return [{"question_id": question_id, "label": configured[question_id].get("label", question_id), "value": value}
+            for question_id, value in supplied.items()]
+
+
 @app.get("/api/public/ats/career-sites/{organization_id}/requisitions")
 async def list_public_career_site_requisitions(organization_id: str):
     """Return only enabled public requisition metadata; never private plans or candidate data."""
@@ -958,6 +1124,7 @@ async def list_public_career_site_requisitions(organization_id: str):
             "location": requisition.location,
             "department_id": requisition.department_id,
             "target_close_date": requisition.target_close_date,
+            "application_questions": requisition.application_questions,
         }
         for requisition in requisitions if _career_site_requisition_is_open(requisition)
     ]
@@ -971,6 +1138,7 @@ async def submit_career_site_application(requisition_id: str, req: CareerSiteApp
         raise HTTPException(status_code=404, detail="Career-site requisition not available")
     if not req.consent_to_recruit:
         raise HTTPException(status_code=409, detail="Recruiting consent is required before submitting a career-site application")
+    application_answers = _validated_application_answers(requisition.application_questions, req.application_answers)
     candidate = await world.find_duplicate_candidate(
         req.organization_id, email=req.email, phone=req.phone, linkedin_url=req.linkedin_url
     )
@@ -1028,6 +1196,7 @@ async def submit_career_site_application(requisition_id: str, req: CareerSiteApp
         current_stage_name="Applied",
         source="career_site",
         source_detail=f"career_site:{requisition_id}",
+        application_answers=application_answers,
         stage_history=[{"stage_id": None, "stage_name": "Applied", "changed_at": now, "actor_user_id": "public:career_site"}],
     ))
     await governance.emit(DomainEvent(
@@ -1036,7 +1205,7 @@ async def submit_career_site_application(requisition_id: str, req: CareerSiteApp
         subject_type="application",
         subject_id=application.application_id,
         organization_id=req.organization_id,
-        payload={"candidate_id": candidate.candidate_id, "requisition_id": requisition_id, "consent_id": consent.consent_id, "candidate_created": candidate_created},
+        payload={"candidate_id": candidate.candidate_id, "requisition_id": requisition_id, "consent_id": consent.consent_id, "candidate_created": candidate_created, "answer_count": len(application_answers)},
     ))
     await world.record_activity(ActivityRecord(
         organization_id=req.organization_id,
@@ -1444,6 +1613,7 @@ class HiringDecisionCreateRequest(BaseModel):
     application_id: str = Field(min_length=3, max_length=200)
     outcome: str = Field(pattern="^(hire|reject)$")
     rationale: str = Field(min_length=10, max_length=10_000)
+    disposition_reason_code: Optional[str] = Field(default=None, min_length=2, max_length=80, pattern="^[a-z0-9][a-z0-9_-]*$")
 
 
 def _has_active_recruiting_consent(consents: list[CandidateConsent]) -> Optional[CandidateConsent]:
@@ -1632,6 +1802,11 @@ async def request_ats_hiring_decision(
     existing = await world.list_hiring_decisions(user.organization_id, application_id=application.application_id)
     if any(item.status == "awaiting_approval" for item in existing):
         raise HTTPException(status_code=409, detail="A hiring decision is already awaiting approval for this application")
+    disposition_reason = None
+    if req.disposition_reason_code:
+        disposition_reason = await world.get_disposition_reason(user.organization_id, req.disposition_reason_code)
+        if not disposition_reason or not disposition_reason.is_active:
+            raise HTTPException(status_code=422, detail="Disposition reason is not available")
     decision = HiringDecision(
         organization_id=user.organization_id,
         application_id=application.application_id,
@@ -1639,6 +1814,8 @@ async def request_ats_hiring_decision(
         requisition_id=application.requisition_id,
         outcome=req.outcome,
         rationale=req.rationale,
+        disposition_reason_code=disposition_reason.code if disposition_reason else None,
+        disposition_reason_label=disposition_reason.label if disposition_reason else None,
         requested_by_user_id=user.user_id,
     )
     approval = Approval(
@@ -1651,7 +1828,7 @@ async def request_ats_hiring_decision(
             "hiring_decision_id": decision.hiring_decision_id,
             "application_id": application.application_id,
             "candidate_id": application.candidate_id,
-            "outcome": decision.outcome,
+            "outcome": decision.outcome, "disposition_reason_code": decision.disposition_reason_code,
             "correlation_id": decision.hiring_decision_id,
         },
     )
@@ -1664,7 +1841,7 @@ async def request_ats_hiring_decision(
         subject_type="hiring_decision",
         subject_id=decision.hiring_decision_id,
         organization_id=user.organization_id,
-        payload={"application_id": application.application_id, "candidate_id": application.candidate_id, "outcome": decision.outcome, "approval_id": approval.approval_id},
+        payload={"application_id": application.application_id, "candidate_id": application.candidate_id, "outcome": decision.outcome, "approval_id": approval.approval_id, "disposition_reason_code": decision.disposition_reason_code},
         correlation_id=decision.hiring_decision_id,
     ))
     await world.record_activity(ActivityRecord(
@@ -1673,7 +1850,7 @@ async def request_ats_hiring_decision(
         entity_id=application.candidate_id,
         event_type="hiring_decision.requested",
         actor_user_id=user.user_id,
-        payload={"hiring_decision_id": decision.hiring_decision_id, "application_id": application.application_id, "outcome": decision.outcome, "approval_id": approval.approval_id},
+        payload={"hiring_decision_id": decision.hiring_decision_id, "application_id": application.application_id, "outcome": decision.outcome, "approval_id": approval.approval_id, "disposition_reason_code": decision.disposition_reason_code},
     ))
     response = decision.model_dump()
     response["approval"] = approval.model_dump()

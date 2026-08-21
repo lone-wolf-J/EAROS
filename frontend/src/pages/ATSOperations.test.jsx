@@ -112,6 +112,7 @@ describe("ATS Operations route contract", () => {
       "only_enabled_open_requisitions_are_listed",
       "recruiting_consent_is_required_before_submission",
       "candidate_and_application_records_use_canonical_ats_models",
+      "requisition_configured_questions_are_validated_and_stored_canonically",
       "submission_never_triggers_outbound_automation",
     ]);
   });

@@ -1510,3 +1510,63 @@ def test_core_ats_lifecycle_creates_canonical_records_and_defers_final_status_to
     assert decision["status"] == "awaiting_approval"
     assert len(governance.approvals) == 1
     assert governance.approvals[0].requested_by == recruiter.user_id
+
+
+def test_configured_application_questions_accept_only_canonical_required_answers():
+    questions = server._normalized_application_questions([
+        {"question_id": "work_authorization", "label": "Authorized to work?", "type": "single_select", "required": True, "options": ["Yes", "No"]},
+        {"question_id": "portfolio", "label": "Portfolio", "type": "text", "required": False},
+    ])
+
+    accepted = server._validated_application_answers(questions, [
+        {"question_id": "work_authorization", "value": "Yes"},
+        {"question_id": "portfolio", "value": "https://portfolio.example.test"},
+    ])
+    assert accepted[0]["question_id"] == "work_authorization"
+    assert accepted[0]["value"] == "Yes"
+
+    with pytest.raises(HTTPException) as missing_required:
+        server._validated_application_answers(questions, [])
+    assert missing_required.value.status_code == 422
+
+    with pytest.raises(HTTPException) as undeclared_question:
+        server._validated_application_answers(questions, [{"question_id": "untrusted", "value": "value"}])
+    assert undeclared_question.value.status_code == 400
+
+
+def test_source_performance_uses_only_tenant_loaded_candidates_and_applications(monkeypatch):
+    class _World:
+        async def list_applications(self, organization_id):
+            assert organization_id == "org_alpha"
+            return [
+                SimpleNamespace(candidate_id="cand_a", source="career_site", current_stage_name="Applied", status="active"),
+                SimpleNamespace(candidate_id="cand_a", source="career_site", current_stage_name="Hired", status="active"),
+                SimpleNamespace(candidate_id="cand_b", source="", current_stage_name="Rejected", status="rejected"),
+            ]
+
+        async def list_candidates(self, organization_id):
+            assert organization_id == "org_alpha"
+            return [SimpleNamespace(candidate_id="cand_a", source="career_site"), SimpleNamespace(candidate_id="cand_b", source="referral")]
+
+    monkeypatch.setattr(server, "world", _World())
+    recruiter = SimpleNamespace(user_id="recruiter_alpha", organization_id="org_alpha", role=Role.RECRUITER)
+    result = asyncio.run(server.get_ats_source_performance(recruiter))
+
+    assert result["organization_id"] == "org_alpha"
+    assert result["sources"] == [
+        {"source": "career_site", "applications": 2, "active": 1, "hired": 1, "rejected": 0},
+        {"source": "referral", "applications": 1, "active": 0, "hired": 0, "rejected": 1},
+    ]
+
+
+def test_benchmarked_ats_catalog_routes_preserve_governance_and_record_only_delivery_boundaries():
+    source = Path(__file__).parents[1].joinpath("server.py").read_text()
+
+    assert '@app.put("/api/ats/requisitions/{requisition_id}/application-questions")' in source
+    assert "Application questions cannot change after applications are received" in source
+    assert '@app.post("/api/ats/disposition-reasons", status_code=201)' in source
+    assert "_require_role(user, Role.ADMIN)" in source
+    assert '@app.post("/api/ats/communication-templates", status_code=201)' in source
+    assert '"delivery_state": "record_only_provider_not_configured"' in source
+    assert '@app.get("/api/ats/analytics/source-performance")' in source
+    assert "disposition_reason_code" in source

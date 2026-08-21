@@ -7,6 +7,7 @@ export const CAREER_SITE_GUARDRAILS = [
   "only_enabled_open_requisitions_are_listed",
   "recruiting_consent_is_required_before_submission",
   "candidate_and_application_records_use_canonical_ats_models",
+  "requisition_configured_questions_are_validated_and_stored_canonically",
   "submission_never_triggers_outbound_automation",
 ];
 
@@ -21,6 +22,7 @@ export default function CareerSite() {
   const [submitError, setSubmitError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(null);
+  const [answers, setAnswers] = useState({});
   const [form, setForm] = useState({
     requisitionId: "",
     fullName: "",
@@ -57,6 +59,16 @@ export default function CareerSite() {
   }, [organizationId]);
 
   const update = (field, value) => setForm((previous) => ({ ...previous, [field]: value }));
+  const selectedRequisition = requisitions.find((requisition) => requisition.requisition_id === form.requisitionId);
+  const updateAnswer = (questionId, value) => setAnswers((previous) => ({ ...previous, [questionId]: value }));
+
+  const selectRequisition = (requisitionId) => {
+    update("requisitionId", requisitionId);
+    const requisition = requisitions.find((item) => item.requisition_id === requisitionId);
+    setAnswers(Object.fromEntries((requisition?.application_questions || []).map((question) => [
+      question.question_id, question.type === "boolean" ? false : question.type === "multi_select" ? [] : "",
+    ])));
+  };
 
   const submit = async (event) => {
     event.preventDefault();
@@ -75,6 +87,10 @@ export default function CareerSite() {
         current_title: form.currentTitle,
         skills: form.skills.split(",").map((skill) => skill.trim()).filter(Boolean),
         consent_to_recruit: true,
+        application_answers: (selectedRequisition?.application_questions || []).map((question) => ({
+          question_id: question.question_id,
+          value: answers[question.question_id],
+        })),
       });
       setSubmitted(data);
     } catch (error) {
@@ -115,12 +131,13 @@ export default function CareerSite() {
           ) : (
             <form className="mt-7 space-y-4" onSubmit={submit}>
               <label className="block space-y-1.5"><span className="font-mono2 text-[10px] tracking-widest text-slate-400">ORGANIZATION IDENTIFIER</span><input className={inputClass} value={organizationId} onChange={(event) => setOrganizationId(event.target.value)} placeholder="Organization identifier" required /></label>
-              <label className="block space-y-1.5"><span className="font-mono2 text-[10px] tracking-widest text-slate-400">OPEN ROLE</span><select className={inputClass} value={form.requisitionId} onChange={(event) => update("requisitionId", event.target.value)} disabled={loading || !requisitions.length} required><option value="">{loading ? "Loading open roles…" : "Choose a role"}</option>{requisitions.map((requisition) => <option key={requisition.requisition_id} value={requisition.requisition_id}>{requisition.title}{requisition.location ? ` · ${requisition.location}` : ""}</option>)}</select></label>
+              <label className="block space-y-1.5"><span className="font-mono2 text-[10px] tracking-widest text-slate-400">OPEN ROLE</span><select className={inputClass} value={form.requisitionId} onChange={(event) => selectRequisition(event.target.value)} disabled={loading || !requisitions.length} required><option value="">{loading ? "Loading open roles…" : "Choose a role"}</option>{requisitions.map((requisition) => <option key={requisition.requisition_id} value={requisition.requisition_id}>{requisition.title}{requisition.location ? ` · ${requisition.location}` : ""}</option>)}</select></label>
               {loadError && <p className="rounded-sm border border-rose-500/25 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{loadError}</p>}
               <div className="grid gap-4 sm:grid-cols-2"><label className="block space-y-1.5"><span className="font-mono2 text-[10px] tracking-widest text-slate-400">FULL NAME</span><input className={inputClass} value={form.fullName} onChange={(event) => update("fullName", event.target.value)} required /></label><label className="block space-y-1.5"><span className="font-mono2 text-[10px] tracking-widest text-slate-400">EMAIL</span><input className={inputClass} type="email" value={form.email} onChange={(event) => update("email", event.target.value)} /></label></div>
               <div className="grid gap-4 sm:grid-cols-2"><label className="block space-y-1.5"><span className="font-mono2 text-[10px] tracking-widest text-slate-400">PHONE</span><input className={inputClass} value={form.phone} onChange={(event) => update("phone", event.target.value)} /></label><label className="block space-y-1.5"><span className="font-mono2 text-[10px] tracking-widest text-slate-400">LOCATION</span><input className={inputClass} value={form.location} onChange={(event) => update("location", event.target.value)} /></label></div>
               <label className="block space-y-1.5"><span className="font-mono2 text-[10px] tracking-widest text-slate-400">CURRENT TITLE</span><input className={inputClass} value={form.currentTitle} onChange={(event) => update("currentTitle", event.target.value)} /></label>
               <label className="block space-y-1.5"><span className="font-mono2 text-[10px] tracking-widest text-slate-400">SKILLS</span><input className={inputClass} value={form.skills} onChange={(event) => update("skills", event.target.value)} placeholder="Comma-separated skills" /></label>
+              {!!selectedRequisition?.application_questions?.length && <fieldset className="space-y-4 rounded-sm border border-teal-400/20 bg-teal-400/5 p-4"><legend className="px-1 font-mono2 text-[10px] tracking-widest text-teal-200">ROLE-SPECIFIC QUESTIONS</legend>{selectedRequisition.application_questions.map((question) => <label key={question.question_id} className="block space-y-1.5"><span className="text-sm font-medium text-slate-200">{question.label}{question.required ? <span className="ml-1 text-teal-300">*</span> : null}</span>{question.type === "textarea" ? <textarea className={inputClass} value={answers[question.question_id] || ""} onChange={(event) => updateAnswer(question.question_id, event.target.value)} required={question.required} /> : question.type === "boolean" ? <span className="flex gap-3 rounded-sm border border-slate-700 bg-slate-950/60 p-3 text-sm text-slate-300"><input className="mt-0.5 h-4 w-4 accent-teal-400" type="checkbox" checked={Boolean(answers[question.question_id])} onChange={(event) => updateAnswer(question.question_id, event.target.checked)} required={question.required} />Confirm</span> : question.type === "single_select" ? <select className={inputClass} value={answers[question.question_id] || ""} onChange={(event) => updateAnswer(question.question_id, event.target.value)} required={question.required}><option value="">Choose an option</option>{question.options.map((option) => <option key={option} value={option}>{option}</option>)}</select> : question.type === "multi_select" ? <select className={inputClass} multiple value={answers[question.question_id] || []} onChange={(event) => updateAnswer(question.question_id, Array.from(event.target.selectedOptions, (option) => option.value))} required={question.required}>{question.options.map((option) => <option key={option} value={option}>{option}</option>)}</select> : <input className={inputClass} value={answers[question.question_id] || ""} onChange={(event) => updateAnswer(question.question_id, event.target.value)} required={question.required} />}</label>)}</fieldset>}
               <label className="flex gap-3 rounded-sm border border-slate-700 bg-slate-950/60 p-3 text-sm text-slate-300"><input className="mt-1 h-4 w-4 accent-teal-400" type="checkbox" checked={form.consent} onChange={(event) => update("consent", event.target.checked)} required /><span>I consent to the organization processing this application for recruiting. I understand this form records my application and does not send automated messages.</span></label>
               {submitError && <p className="rounded-sm border border-rose-500/25 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{submitError}</p>}
               <button type="submit" disabled={submitting || loading || !requisitions.length} className="w-full rounded-sm bg-gradient-to-r from-violet-600 to-teal-500 px-4 py-3 font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50">{submitting ? "Recording application…" : "Submit application"}</button>

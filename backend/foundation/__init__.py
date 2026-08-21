@@ -59,6 +59,8 @@ def new_notification_preference_id() -> str: return _new_id("notifpref")
 def new_candidate_notification_delivery_id() -> str: return _new_id("candnotif")
 def new_recruiter_alert_id() -> str: return _new_id("alert")
 def new_data_subject_request_id() -> str: return _new_id("dsr")
+def new_disposition_reason_id() -> str: return _new_id("dispreason")
+def new_communication_template_id() -> str: return _new_id("commtemplate")
 
 
 def utcnow() -> datetime:
@@ -246,6 +248,10 @@ class EventType(str, Enum):
     AUDIT_EXPORT_REQUESTED = "governance.audit_export.requested"
     ONBOARDING_HANDOFF_CREATED = "world.onboarding_handoff.created"
     ONBOARDING_HANDOFF_UPDATED = "world.onboarding_handoff.updated"
+    APPLICATION_QUESTIONS_CONFIGURED = "world.application_questions.configured"
+    APPLICATION_RESPONSES_CAPTURED = "world.application_responses.captured"
+    DISPOSITION_REASON_CONFIGURED = "world.disposition_reason.configured"
+    COMMUNICATION_TEMPLATE_CREATED = "world.communication_template.created"
     # Reflection
     REFLECTION_CREATED = "reflection.created"
 
