@@ -47,7 +47,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install focused test tooling
-        run: python -m pip install --upgrade pip pytest
+        run: python -m pip install --upgrade pip pytest pytest-xdist
       - name: Verify validation package contracts
         working-directory: backend
         run: PYTHONPATH=. pytest -q tests/test_infrastructure_validation_package.py tests/test_production_security_contract.py
