@@ -112,3 +112,7 @@ The current EAROS release baseline has **no organization-owned email-delivery pr
 ### Owner reconfirmation — 2026-08-21
 
 The business owner reconfirmed that EAROS must **remain record-only**. No email-delivery, SMS, or SSO/SAML provider is authorized for configuration at this time. The system must therefore preserve notification intent, recruiter in-app alerts, consent evidence, delivery state, and configuration readiness records while continuing to prevent outbound delivery and identity-provider activation. This decision does not waive the activation evidence described above and must be revisited before any production change enables a provider-backed channel.
+
+### Record-only lifecycle verification — 2026-08-21
+
+EAROS now writes consent-aware candidate notification intents for application receipt, interview scheduling, and independently approved offer or rejection outcomes. It creates tenant-scoped recruiter alerts for new applicants, pipeline-stage changes, and interview scheduling, while honoring each recipient’s in-app alert preference. Each candidate notification is retained as `not_delivered` with `provider_not_configured`; no network delivery path, sender credential, or provider claim is introduced. Focused contracts, the full source regression suite, frontend tests/build, and [hosted infrastructure validation run 32500207569](https://github.com/lone-wolf-J/EAROS/actions/runs/32500207569) passed for this record-only lifecycle control.
