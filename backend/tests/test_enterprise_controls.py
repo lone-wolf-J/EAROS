@@ -987,6 +987,76 @@ def test_candidate_notification_delivery_records_audit_and_never_claims_provider
     assert ("event", "org_alpha", "world.candidate_notification.recorded", "not_delivered") in calls
 
 
+def test_lifecycle_candidate_notification_is_consent_aware_and_never_claims_delivery(monkeypatch):
+    calls = []
+
+    class _World:
+        async def list_candidate_consents(self, organization_id, candidate_id):
+            assert (organization_id, candidate_id) == ("org_alpha", "cand_alpha")
+            return [server.CandidateConsent(organization_id=organization_id, candidate_id=candidate_id, purpose="recruiting")]
+
+        async def record_candidate_notification_delivery(self, delivery):
+            calls.append(("delivery", delivery.notification_type, delivery.delivery_state, delivery.delivery_reason, delivery.consent_id))
+            return delivery
+
+        async def record_activity(self, activity):
+            calls.append(("activity", activity.organization_id, activity.entity_id, activity.event_type))
+            return activity
+
+    class _Governance:
+        async def emit(self, event):
+            calls.append(("event", event.event_type.value, event.payload["delivery_state"]))
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+
+    result = asyncio.run(server._record_lifecycle_candidate_notification(
+        organization_id="org_alpha", candidate_id="cand_alpha", notification_type="offer_extended",
+        subject="Offer decision approved", body="record-only", actor_user_id="admin_alpha",
+    ))
+
+    assert result and result.delivery_state == "not_delivered"
+    assert ("delivery", "offer_extended", "not_delivered", "provider_not_configured", result.consent_id) in calls
+    assert ("event", "world.candidate_notification.recorded", "not_delivered") in calls
+    assert ("activity", "org_alpha", "cand_alpha", "candidate.lifecycle_notification_recorded") in calls
+
+
+def test_lifecycle_recruiter_alerts_are_tenant_scoped_and_honor_in_app_preference(monkeypatch):
+    calls = []
+
+    class _Users:
+        async def find_one(self, query, _projection):
+            calls.append(("lookup", query["user_id"], query["organization_id"]))
+            return {"user_id": query["user_id"], "organization_id": query["organization_id"]} if query["user_id"] != "foreign_user" else None
+
+    class _World:
+        async def get_notification_preference(self, _organization_id, user_id):
+            return SimpleNamespace(in_app_enabled=user_id != "muted_user")
+
+        async def create_recruiter_alert(self, alert):
+            calls.append(("alert", alert.organization_id, alert.recipient_user_id, alert.alert_type, alert.status))
+            return alert
+
+    class _Governance:
+        async def emit(self, event):
+            calls.append(("event", event.event_type.value, event.payload["recipient_user_id"]))
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    monkeypatch.setattr(server, "db", SimpleNamespace(users=_Users()))
+
+    alerts = asyncio.run(server._create_lifecycle_recruiter_alerts(
+        organization_id="org_alpha", recipient_user_ids=["recruiter_alpha", "muted_user", "foreign_user", "recruiter_alpha"],
+        alert_type="pipeline_stage_changed", title="Stage changed", body="record-only alert",
+        entity_type="application", entity_id="app_alpha", actor_user_id="recruiter_alpha",
+    ))
+
+    assert [alert.recipient_user_id for alert in alerts] == ["recruiter_alpha"]
+    assert ("alert", "org_alpha", "recruiter_alpha", "pipeline_stage_changed", "unread") in calls
+    assert ("event", "world.recruiter_alert.created", "recruiter_alpha") in calls
+    assert ("lookup", "foreign_user", "org_alpha") in calls
+
+
 def test_recruiter_alert_validates_recipient_within_active_tenant(monkeypatch):
     calls = []
 

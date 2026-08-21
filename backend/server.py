@@ -316,6 +316,127 @@ async def _scoped_application(application_id: str, user: AppUser):
     return application
 
 
+async def _record_lifecycle_candidate_notification(
+    *,
+    organization_id: str,
+    candidate_id: str,
+    notification_type: str,
+    subject: str,
+    body: str,
+    actor_user_id: Optional[str],
+) -> Optional[CandidateNotificationDelivery]:
+    """Persist consent-aware notification intent; provider delivery remains fail-closed."""
+    list_consents = getattr(world, "list_candidate_consents", None)
+    record_delivery = getattr(world, "record_candidate_notification_delivery", None)
+    if not callable(list_consents) or not callable(record_delivery):
+        return None
+    consents = await list_consents(organization_id, candidate_id)
+    consent = next(
+        (
+            item for item in consents
+            if item.purpose == "recruiting"
+            and getattr(item.status, "value", item.status) == "granted"
+        ),
+        None,
+    )
+    if not consent:
+        return None
+    delivery = await record_delivery(CandidateNotificationDelivery(
+        organization_id=organization_id,
+        candidate_id=candidate_id,
+        notification_type=notification_type,
+        subject=subject,
+        body=body,
+        delivery_state="not_delivered",
+        delivery_reason="provider_not_configured",
+        consent_id=consent.consent_id,
+        created_by_user_id=actor_user_id,
+    ))
+    await governance.emit(DomainEvent(
+        event_type=EventType.CANDIDATE_NOTIFICATION_RECORDED,
+        actor=f"user:{actor_user_id}" if actor_user_id else "system:recruiting_lifecycle",
+        subject_type="candidate_notification_delivery",
+        subject_id=delivery.candidate_notification_delivery_id,
+        organization_id=organization_id,
+        payload={
+            "candidate_id": candidate_id,
+            "notification_type": notification_type,
+            "delivery_state": delivery.delivery_state,
+            "consent_id": delivery.consent_id,
+        },
+    ))
+    await world.record_activity(ActivityRecord(
+        organization_id=organization_id,
+        entity_type="candidate",
+        entity_id=candidate_id,
+        event_type="candidate.lifecycle_notification_recorded",
+        actor_user_id=actor_user_id,
+        payload={"notification_type": notification_type, "delivery_state": delivery.delivery_state},
+    ))
+    return delivery
+
+
+async def _create_lifecycle_recruiter_alerts(
+    *,
+    organization_id: str,
+    recipient_user_ids: list[str],
+    alert_type: str,
+    title: str,
+    body: str,
+    entity_type: str,
+    entity_id: str,
+    actor_user_id: Optional[str],
+) -> list[RecruiterAlert]:
+    """Create recipient-verified in-app alerts only; no provider channel is invoked."""
+    if not recipient_user_ids:
+        return []
+    find_user = getattr(getattr(db, "users", None), "find_one", None)
+    create_alert = getattr(world, "create_recruiter_alert", None)
+    get_preference = getattr(world, "get_notification_preference", None)
+    if not callable(find_user) or not callable(create_alert):
+        return []
+    alerts: list[RecruiterAlert] = []
+    for recipient_user_id in dict.fromkeys(item for item in recipient_user_ids if item):
+        member = await find_user(
+            {"user_id": recipient_user_id, "organization_id": organization_id}, {"_id": 0}
+        )
+        if not member:
+            continue
+        preference = await get_preference(organization_id, recipient_user_id) if callable(get_preference) else None
+        if preference and not preference.in_app_enabled:
+            continue
+        alert = await create_alert(RecruiterAlert(
+            organization_id=organization_id,
+            recipient_user_id=recipient_user_id,
+            alert_type=alert_type,
+            title=title,
+            body=body,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            created_by_user_id=actor_user_id,
+        ))
+        alerts.append(alert)
+        await governance.emit(DomainEvent(
+            event_type=EventType.RECRUITER_ALERT_CREATED,
+            actor=f"user:{actor_user_id}" if actor_user_id else "system:recruiting_lifecycle",
+            subject_type="recruiter_alert",
+            subject_id=alert.recruiter_alert_id,
+            organization_id=organization_id,
+            payload={"recipient_user_id": recipient_user_id, "alert_type": alert_type, "entity_type": entity_type, "entity_id": entity_id},
+        ))
+    return alerts
+
+
+async def _requisition_alert_recipients(organization_id: str, requisition_id: Optional[str]) -> list[str]:
+    get_requisition = getattr(world, "get_requisition", None)
+    if not requisition_id or not callable(get_requisition):
+        return []
+    requisition = await get_requisition(organization_id, requisition_id)
+    if not requisition:
+        return []
+    return [*requisition.recruiter_ids, requisition.hiring_manager_id or ""]
+
+
 # ---------- Auth router ----------
 app.include_router(build_auth_router(db))
 
@@ -921,6 +1042,19 @@ async def create_ats_application(req: ApplicationCreateRequest, user: AppUser = 
         actor_user_id=user.user_id,
         payload={"candidate_id": application.candidate_id},
     ))
+    await _record_lifecycle_candidate_notification(
+        organization_id=user.organization_id, candidate_id=application.candidate_id,
+        notification_type="application_received", subject="Application received",
+        body="Your application has been recorded. Delivery is pending explicit provider configuration.",
+        actor_user_id=user.user_id,
+    )
+    await _create_lifecycle_recruiter_alerts(
+        organization_id=user.organization_id,
+        recipient_user_ids=await _requisition_alert_recipients(user.organization_id, application.requisition_id),
+        alert_type="new_applicant", title="New applicant recorded",
+        body="A new application was added to the recruiting workflow.",
+        entity_type="application", entity_id=application.application_id, actor_user_id=user.user_id,
+    )
     return application.model_dump()
 
 
@@ -1231,6 +1365,19 @@ async def submit_career_site_application(requisition_id: str, req: CareerSiteApp
         actor_user_id=None,
         payload={"candidate_id": candidate.candidate_id, "requisition_id": requisition_id, "consent_id": consent.consent_id},
     ))
+    await _record_lifecycle_candidate_notification(
+        organization_id=req.organization_id, candidate_id=candidate.candidate_id,
+        notification_type="application_received", subject="Application received",
+        body="Your application has been recorded. Delivery is pending explicit provider configuration.",
+        actor_user_id=None,
+    )
+    await _create_lifecycle_recruiter_alerts(
+        organization_id=req.organization_id,
+        recipient_user_ids=[*requisition.recruiter_ids, requisition.hiring_manager_id or ""],
+        alert_type="new_applicant", title="New career-site applicant",
+        body="A new career-site application was recorded for this requisition.",
+        entity_type="application", entity_id=application.application_id, actor_user_id=None,
+    )
     return {
         "application_id": application.application_id,
         "received_at": application.applied_at,
@@ -1437,6 +1584,13 @@ async def move_ats_application_stage(
         actor_user_id=user.user_id,
         payload={"from": previous_name, "to": req.stage_name, "reason": req.reason},
     ))
+    await _create_lifecycle_recruiter_alerts(
+        organization_id=user.organization_id,
+        recipient_user_ids=await _requisition_alert_recipients(user.organization_id, application.requisition_id),
+        alert_type="pipeline_stage_changed", title="Application stage changed",
+        body=f"An application moved from {previous_name} to {req.stage_name}.",
+        entity_type="application", entity_id=application.application_id, actor_user_id=user.user_id,
+    )
     return application.model_dump()
 
 
@@ -1620,6 +1774,18 @@ async def create_ats_interview(req: InterviewCreateRequest, user: AppUser = Depe
         actor_user_id=user.user_id,
         payload={"interview_id": interview.interview_id, "application_id": interview.application_id, "scheduled_at": interview.scheduled_at},
     ))
+    await _record_lifecycle_candidate_notification(
+        organization_id=user.organization_id, candidate_id=interview.candidate_id,
+        notification_type="interview_scheduled", subject="Interview scheduled",
+        body="An interview was scheduled. Delivery is pending explicit provider configuration.",
+        actor_user_id=user.user_id,
+    )
+    await _create_lifecycle_recruiter_alerts(
+        organization_id=user.organization_id, recipient_user_ids=interview.interviewer_ids,
+        alert_type="interview_reminder", title="Interview scheduled",
+        body=f"An interview is scheduled for {interview.scheduled_at}.",
+        entity_type="interview", entity_id=interview.interview_id, actor_user_id=user.user_id,
+    )
     return interview.model_dump()
 
 
@@ -2264,6 +2430,17 @@ async def decide_approval(
             actor_user_id=user.user_id,
             payload={"hiring_decision_id": resolved.hiring_decision_id, "approval_id": a.approval_id, "outcome": resolved.outcome, "application_id": resolved.application_id},
         ))
+        if a.status == "granted":
+            notification_type = "offer_extended" if resolved.outcome == "hire" else "rejection_recorded"
+            subject = "Offer decision approved" if resolved.outcome == "hire" else "Application decision recorded"
+            await _record_lifecycle_candidate_notification(
+                organization_id=user.organization_id,
+                candidate_id=resolved.candidate_id,
+                notification_type=notification_type,
+                subject=subject,
+                body="The hiring decision is recorded. Delivery is pending explicit provider configuration.",
+                actor_user_id=user.user_id,
+            )
         response["hiring_decision"] = resolved.model_dump()
     return response
 
