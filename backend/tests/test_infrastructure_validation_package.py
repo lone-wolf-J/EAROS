@@ -151,6 +151,8 @@ def test_authenticated_browser_smoke_remains_disposable_and_exercises_compiled_r
     assert "yarn test:browser-smoke" in browser_harness
     assert "EAROS_BROWSER_API_BASE=http://127.0.0.1:18080" in browser_harness
     assert "synthetic recruiter can load compiled protected recruiter workflows" in browser_test
+    assert 'getByRole("button", { name: "recruiter", exact: true })' in browser_test
+    assert 'toHaveURL(/\\/mission$/)' in browser_test
     assert 'path: "/ats"' in browser_test
     assert 'path: "/ats/workflows"' in browser_test
     assert 'path: "/interview"' in browser_test
