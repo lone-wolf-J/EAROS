@@ -5,6 +5,7 @@ on:
     paths:
       - "docker-compose.production.yml"
       - "docker-compose.infrastructure-smoke.yml"
+      - "docker-compose.infrastructure-auth-smoke.yml"
       - "backend/Dockerfile"
       - "backend/requirements.txt"
       - "backend/tests/test_infrastructure_validation_package.py"
@@ -19,6 +20,7 @@ on:
     paths:
       - "docker-compose.production.yml"
       - "docker-compose.infrastructure-smoke.yml"
+      - "docker-compose.infrastructure-auth-smoke.yml"
       - "backend/Dockerfile"
       - "backend/requirements.txt"
       - "backend/tests/test_infrastructure_validation_package.py"
@@ -98,10 +100,14 @@ jobs:
           node-version: "22"
       - name: Build and start the non-secret EAROS smoke stack
         run: bash scripts/run-infrastructure-smoke.sh
+      - name: Exercise isolated authenticated recruiting reads
+        run: bash scripts/run-infrastructure-auth-smoke.sh
       - name: Upload smoke logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: earos-infrastructure-smoke-logs
-          path: /tmp/earos-infrastructure-smoke.log
+          path: |
+            /tmp/earos-infrastructure-smoke.log
+            /tmp/earos-infrastructure-auth-smoke.log
           if-no-files-found: ignore

@@ -109,6 +109,22 @@ def test_self_contained_compose_smoke_is_built_and_exercised_in_ci() -> None:
     assert '"backend/requirements.txt"' in workflow
 
 
+def test_isolated_authenticated_smoke_never_enables_dev_login_in_production_stack() -> None:
+    production_smoke = (REPOSITORY_ROOT / "docker-compose.infrastructure-smoke.yml").read_text(encoding="utf8")
+    authenticated_smoke = (REPOSITORY_ROOT / "docker-compose.infrastructure-auth-smoke.yml").read_text(encoding="utf8")
+    harness = (REPOSITORY_ROOT / "scripts" / "run-infrastructure-auth-smoke.sh").read_text(encoding="utf8")
+    workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "infrastructure-validation.yml").read_text(encoding="utf8")
+
+    assert "EAROS_ENV: production" in production_smoke
+    assert 'EAROS_ENABLE_DEV_LOGIN: "false"' in production_smoke
+    assert "EAROS_ENV: development" in authenticated_smoke
+    assert 'EAROS_ENABLE_DEV_LOGIN: "true"' in authenticated_smoke
+    assert "/api/auth/dev-login" in harness
+    assert "/api/ats/requisitions" in harness
+    assert "/api/ats/interviews" in harness
+    assert "run-infrastructure-auth-smoke.sh" in workflow
+
+
 def test_required_container_dependencies_exclude_optional_private_llm_client() -> None:
     requirements = (REPOSITORY_ROOT / "backend" / "requirements.txt").read_text(encoding="utf8")
     planner = (REPOSITORY_ROOT / "backend" / "platform_core" / "planner.py").read_text(encoding="utf8")

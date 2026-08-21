@@ -1,0 +1,9 @@
+services:
+  api:
+    environment:
+      EAROS_ENV: development
+      EAROS_ENABLE_DEV_LOGIN: "true"
+      EAROS_ENABLE_BOOTSTRAP_ENDPOINT: "true"
+      EAROS_BOOTSTRAP_SECRET: infrastructure-auth-smoke-only
+      EAROS_DEFAULT_ORGANIZATION_ID: org_levelshift
+      EAROS_COOKIE_SECURE: "false"
