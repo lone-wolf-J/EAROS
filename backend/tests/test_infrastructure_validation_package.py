@@ -103,6 +103,7 @@ def test_self_contained_compose_smoke_is_built_and_exercised_in_ci() -> None:
     assert "docker compose" in harness
     assert "/api/ready" in harness
     assert "EAROS frontend container" in harness
+    assert "for route in /ats /ats/workflows /interview" in harness
     assert "down --volumes --remove-orphans" in harness
     assert "scripts/run-infrastructure-smoke.sh" in workflow
     assert '"docker-compose.infrastructure-smoke.yml"' in workflow

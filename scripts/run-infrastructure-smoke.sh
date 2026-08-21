@@ -26,4 +26,12 @@ if ! grep --quiet "EAROS" <<<"$web_payload"; then
   exit 1
 fi
 
+for route in /ats /ats/workflows /interview; do
+  route_payload="$(curl --fail --silent --show-error "http://127.0.0.1:18080${route}")"
+  if ! grep --quiet "EAROS" <<<"$route_payload"; then
+    echo "EAROS frontend container did not serve the compiled SPA shell for ${route}" >&2
+    exit 1
+  fi
+done
+
 echo "EAROS self-contained infrastructure smoke validation passed."
