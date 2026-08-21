@@ -48,6 +48,24 @@ The database owner then records an encrypted backup and an isolated restore befo
 node scripts/verify-backup-evidence.mjs /secure/path/backup-restore-evidence.json
 ```
 
+## Docker-capable validation options
+
+The repository includes a protected manual workflow at `.github/workflows/infrastructure-validation.yml`. It always checks the validation package on relevant changes. Its Docker runtime job runs only when a maintainer manually selects `run_runtime=true` and the protected `earos-staging` environment approves the execution.
+
+| Approach | Tradeoffs | Cost | Setup complexity |
+| --- | --- | --- | --- |
+| Run on your staging host | The nearest match to the eventual deployment; the database and identity endpoint can remain inside your private network. | Uses your existing staging host. | Copy the two templates, create the non-production records, and run one command. |
+| Run the protected repository workflow | Uses a temporary Docker-capable runner and retains the workflow log as evidence; the staging database must be reachable from that runner. | Uses your repository’s CI allowance. | Create the protected `earos-staging` environment and add the two multiline secrets below. |
+
+For the protected workflow, add these **environment secrets**, never repository variables or source files:
+
+| Secret | Contents |
+| --- | --- |
+| `EAROS_STAGING_BACKEND_ENV` | The complete non-production `backend/.env` content, including a staging database URL, explicit non-demo HTTPS identity endpoint, explicit CORS origin, and EAROS runtime secrets. |
+| `EAROS_STAGING_VALIDATION_ENV` | The populated `ops/staging-validation.env` content containing local Compose origins, a least-privileged non-production session token, allowed-tenant ID, and a real different-tenant candidate ID. |
+
+The workflow writes these values only to temporary ignored files, executes `scripts/run-compose-validation.sh`, captures redacted logs under `/tmp`, and removes the temporary files even when a check fails. Review the logs and preserve them with the release evidence; do not expose either secret in tickets, chat, or source control.
+
 ## Authenticated browser workflow
 
 After the runtime command succeeds, use the same non-production test user in a browser. Sign in through the approved staging identity flow and capture the following evidence: ATS Operations loads, candidates and pipeline load for the allowed tenant, offers and interviews load without provider delivery, and a second-tenant candidate cannot be opened. Exercise one policy-requiring action only if the test tenant’s approval configuration has been reviewed; confirm that it produces an approval record rather than an immediate irreversible action.

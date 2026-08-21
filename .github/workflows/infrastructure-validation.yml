@@ -1,0 +1,81 @@
+name: EAROS Infrastructure Validation
+
+on:
+  pull_request:
+    paths:
+      - "docker-compose.production.yml"
+      - "backend/Dockerfile"
+      - "frontend/Dockerfile"
+      - "frontend/nginx.conf"
+      - "scripts/**"
+      - "ops/**"
+      - "docs/INFRASTRUCTURE_VALIDATION.md"
+      - ".github/workflows/infrastructure-validation.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docker-compose.production.yml"
+      - "backend/Dockerfile"
+      - "frontend/Dockerfile"
+      - "frontend/nginx.conf"
+      - "scripts/**"
+      - "ops/**"
+      - "docs/INFRASTRUCTURE_VALIDATION.md"
+      - ".github/workflows/infrastructure-validation.yml"
+  workflow_dispatch:
+    inputs:
+      run_runtime:
+        description: "Run Docker Compose against approved non-production secrets"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  package-contracts:
+    name: Infrastructure package contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install focused test tooling
+        run: python -m pip install --upgrade pip pytest
+      - name: Verify validation package contracts
+        working-directory: backend
+        run: PYTHONPATH=. pytest -q tests/test_infrastructure_validation_package.py tests/test_production_security_contract.py
+
+  staging-compose-runtime:
+    name: Protected staging Compose runtime
+    if: github.event_name == 'workflow_dispatch' && inputs.run_runtime == true
+    needs: package-contracts
+    runs-on: ubuntu-latest
+    environment: earos-staging
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Materialize protected non-production inputs
+        env:
+          BACKEND_ENV: ${{ secrets.EAROS_STAGING_BACKEND_ENV }}
+          VALIDATION_ENV: ${{ secrets.EAROS_STAGING_VALIDATION_ENV }}
+        run: |
+          test -n "$BACKEND_ENV"
+          test -n "$VALIDATION_ENV"
+          umask 077
+          printf '%s' "$BACKEND_ENV" > backend/.env
+          printf '%s' "$VALIDATION_ENV" > ops/staging-validation.env
+      - name: Execute readiness and tenant-isolation checks
+        run: bash scripts/run-compose-validation.sh ops/staging-validation.env
+      - name: Remove protected material
+        if: always()
+        run: rm -f backend/.env ops/staging-validation.env
