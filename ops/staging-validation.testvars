@@ -1,0 +1,7 @@
+# Intentionally invalid, non-secret fixture for the validator's fail-closed contract.
+EAROS_VALIDATION_MODE=staging
+EAROS_PUBLIC_API_ORIGIN=https://api-staging.replace-with-your-domain.example
+EAROS_STAGING_WEB_ORIGIN=https://staging.replace-with-your-domain.example
+EAROS_SMOKE_AUTH_TOKEN=replace-with-non-production-session-token
+EAROS_SMOKE_ALLOWED_ORGANIZATION_ID=replace-with-allowed-tenant-id
+EAROS_SMOKE_CROSS_TENANT_CANDIDATE_ID=replace-with-candidate-id-from-a-different-tenant

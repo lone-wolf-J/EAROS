@@ -1,0 +1,15 @@
+{
+  "environment": "isolated-recovery",
+  "provider": "controlled-test-provider",
+  "backupId": "backup-test-20260820",
+  "backupCompletedAt": "2026-08-20T00:00:00Z",
+  "restoreTarget": "earos-isolated-recovery-test",
+  "restoreCompletedAt": "2026-08-20T00:30:00Z",
+  "verifiedBy": "database-owner-test",
+  "encrypted": true,
+  "accessRestricted": true,
+  "collectionIntegrityVerified": true,
+  "tenantIsolationVerified": true,
+  "cutoverNotPerformed": true,
+  "retentionDays": 30
+}

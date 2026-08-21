@@ -1,0 +1,8 @@
+# Non-secret valid fixture used only by the infrastructure-package regression test.
+EAROS_VALIDATION_MODE=staging
+EAROS_PUBLIC_API_ORIGIN=https://api.staging.local
+EAROS_STAGING_WEB_ORIGIN=https://app.staging.local
+EAROS_SMOKE_AUTH_TOKEN=opaque-non-production-test-session-token
+EAROS_SMOKE_ALLOWED_ORGANIZATION_ID=org-staging-allowed
+EAROS_SMOKE_CROSS_TENANT_CANDIDATE_ID=candidate-cross-tenant
+AUTH_SESSION_DATA_URL=https://identity.staging.local/session

@@ -1,0 +1,15 @@
+{
+  "environment": "staging",
+  "provider": "replace-with-database-backup-provider",
+  "backupId": "replace-with-provider-backup-identifier",
+  "backupCompletedAt": "2026-01-01T00:00:00Z",
+  "restoreTarget": "replace-with-isolated-recovery-environment",
+  "restoreCompletedAt": "2026-01-01T00:30:00Z",
+  "verifiedBy": "replace-with-database-owner",
+  "encrypted": true,
+  "accessRestricted": true,
+  "collectionIntegrityVerified": true,
+  "tenantIsolationVerified": true,
+  "cutoverNotPerformed": true,
+  "retentionDays": 30
+}
