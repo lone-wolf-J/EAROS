@@ -4,7 +4,10 @@ on:
   pull_request:
     paths:
       - "docker-compose.production.yml"
+      - "docker-compose.infrastructure-smoke.yml"
       - "backend/Dockerfile"
+      - "backend/requirements.txt"
+      - "backend/tests/test_infrastructure_validation_package.py"
       - "frontend/Dockerfile"
       - "frontend/nginx.conf"
       - "scripts/**"
@@ -15,7 +18,10 @@ on:
     branches: [main]
     paths:
       - "docker-compose.production.yml"
+      - "docker-compose.infrastructure-smoke.yml"
       - "backend/Dockerfile"
+      - "backend/requirements.txt"
+      - "backend/tests/test_infrastructure_validation_package.py"
       - "frontend/Dockerfile"
       - "frontend/nginx.conf"
       - "scripts/**"
