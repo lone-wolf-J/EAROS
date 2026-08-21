@@ -108,3 +108,7 @@ The following dependencies are intentionally not inferred, fabricated, or activa
 ### Current no-provider release decision
 
 The current EAROS release baseline has **no organization-owned email-delivery provider and no SSO identity provider**. Accordingly, candidate and recruiter notifications remain tenant-scoped, consent-aware **records without outbound delivery**, and SSO/SAML remains configuration-ready but inactive. This is an intentional fail-closed release posture, not an error state. Future activation requires the relevant organization owner to supply the inputs identified in the table above and to approve the controlled verification evidence.
+
+### Owner reconfirmation — 2026-08-21
+
+The business owner reconfirmed that EAROS must **remain record-only**. No email-delivery, SMS, or SSO/SAML provider is authorized for configuration at this time. The system must therefore preserve notification intent, recruiter in-app alerts, consent evidence, delivery state, and configuration readiness records while continuing to prevent outbound delivery and identity-provider activation. This decision does not waive the activation evidence described above and must be revisited before any production change enables a provider-backed channel.
