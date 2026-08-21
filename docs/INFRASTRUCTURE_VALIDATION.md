@@ -60,6 +60,8 @@ The self-contained API, MongoDB, Nginx, compiled-route, and authenticated-read s
 
 The same hosted smoke job also runs `scripts/run-backup-restore-smoke.sh`. It starts only a disposable MongoDB container, writes one tenant-scoped synthetic recovery record, creates a `mongodump` archive, drops the disposable database, restores the archive with `mongorestore`, and verifies the exact synthetic record was recovered. It captures local Compose logs and removes the entire temporary project and volumes. This validates executable backup-and-restore mechanics without handling organization data; production backup retention, encryption ownership, access control, and restoration evidence remain subject to the separate provider-controlled procedure.
 
+The disposable recovery check passed on the hosted runner for commit `d40dde5` ([run 32435966679](https://github.com/lone-wolf-J/EAROS/actions/runs/32435966679)).
+
 The API’s optional `emergentintegrations` client is intentionally not part of the required container dependency set because it is unavailable from the public Python package index. EAROS imports it dynamically only for optional model-backed planning and intake; when it is unavailable, the governed planner and intake path use their deterministic fallback behavior. A production deployment that has an approved internal package source may install that enhancement separately after the base image, but it must not weaken the self-contained operational baseline.
 
 | Approach | Tradeoffs | Cost | Setup complexity |
