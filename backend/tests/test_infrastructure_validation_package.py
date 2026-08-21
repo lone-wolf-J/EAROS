@@ -140,6 +140,25 @@ def test_isolated_authenticated_smoke_never_enables_dev_login_in_production_stac
     assert "run-infrastructure-auth-smoke.sh" in workflow
 
 
+def test_authenticated_browser_smoke_remains_disposable_and_exercises_compiled_recruiter_routes() -> None:
+    browser_harness = (REPOSITORY_ROOT / "scripts" / "run-infrastructure-browser-smoke.sh").read_text(encoding="utf8")
+    browser_test = (REPOSITORY_ROOT / "frontend" / "e2e" / "authenticated-smoke.spec.mjs").read_text(encoding="utf8")
+    auth_compose = (REPOSITORY_ROOT / "docker-compose.infrastructure-auth-smoke.yml").read_text(encoding="utf8")
+    workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "infrastructure-validation.yml").read_text(encoding="utf8")
+
+    assert "earos-infrastructure-browser-smoke" in browser_harness
+    assert "trap cleanup EXIT" in browser_harness
+    assert "yarn test:browser-smoke" in browser_harness
+    assert "EAROS_BROWSER_API_BASE=http://127.0.0.1:18000" in browser_harness
+    assert "synthetic recruiter can load compiled protected recruiter workflows" in browser_test
+    assert 'path: "/ats"' in browser_test
+    assert 'path: "/ats/workflows"' in browser_test
+    assert 'path: "/interview"' in browser_test
+    assert "VITE_BACKEND_URL: http://127.0.0.1:18000" in auth_compose
+    assert "run-infrastructure-browser-smoke.sh" in workflow
+    assert "npx playwright install --with-deps chromium" in workflow
+
+
 def test_required_container_dependencies_exclude_optional_private_llm_client() -> None:
     requirements = (REPOSITORY_ROOT / "backend" / "requirements.txt").read_text(encoding="utf8")
     planner = (REPOSITORY_ROOT / "backend" / "platform_core" / "planner.py").read_text(encoding="utf8")

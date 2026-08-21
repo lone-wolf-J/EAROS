@@ -102,6 +102,11 @@ jobs:
         run: bash scripts/run-infrastructure-smoke.sh
       - name: Exercise isolated authenticated recruiting reads
         run: bash scripts/run-infrastructure-auth-smoke.sh
+      - name: Install isolated browser validation tooling
+        working-directory: frontend
+        run: yarn install --frozen-lockfile --ignore-engines --production=false && npx playwright install --with-deps chromium
+      - name: Exercise compiled authenticated recruiter workflows in Chromium
+        run: bash scripts/run-infrastructure-browser-smoke.sh
       - name: Exercise disposable backup and restore recovery
         run: bash scripts/run-backup-restore-smoke.sh
       - name: Upload smoke logs
@@ -112,5 +117,7 @@ jobs:
           path: |
             /tmp/earos-infrastructure-smoke.log
             /tmp/earos-infrastructure-auth-smoke.log
+            /tmp/earos-infrastructure-browser-smoke.log
+            /tmp/earos-infrastructure-browser-smoke
             /tmp/earos-backup-restore-smoke.log
           if-no-files-found: ignore

@@ -64,6 +64,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:browser-smoke": "playwright test --config=playwright.config.mjs e2e/authenticated-smoke.spec.mjs",
     "verify:release-artifact": "node scripts/verify-release-artifact.mjs",
     "verify:branding": "node scripts/verify-product-branding.mjs",
     "verify:deployment-contract": "node scripts/verify-deployment-contract.mjs"
@@ -81,6 +82,7 @@
     ]
   },
   "devDependencies": {
+    "@playwright/test": "1.55.0",
     "@babel/plugin-proposal-private-property-in-object": "7.21.11",
     "@eslint/js": "9.23.0",
     "@types/lodash": "4.17.24",

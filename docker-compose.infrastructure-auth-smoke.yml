@@ -7,3 +7,7 @@ services:
       EAROS_BOOTSTRAP_SECRET: infrastructure-auth-smoke-only
       EAROS_DEFAULT_ORGANIZATION_ID: org_levelshift
       EAROS_COOKIE_SECURE: "false"
+  web:
+    build:
+      args:
+        VITE_BACKEND_URL: http://127.0.0.1:18000

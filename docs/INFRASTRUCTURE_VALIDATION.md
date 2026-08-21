@@ -58,6 +58,8 @@ It then runs `scripts/run-infrastructure-auth-smoke.sh` against a distinct dispo
 
 The self-contained API, MongoDB, Nginx, compiled-route, and authenticated-read smoke suite passed on the hosted runner for commit `b31d63b` ([run 32435607511](https://github.com/lone-wolf-J/EAROS/actions/runs/32435607511)). This is reproducibility evidence for the container images and disposable synthetic environment; it is not evidence that any organization-owned email, SSO, backup, or production identity provider has been activated.
 
+The hosted workflow also runs `scripts/run-infrastructure-browser-smoke.sh`. It uses the same disposable development-only auth overlay, signs in only the seeded synthetic recruiter, and drives Chromium against the compiled Nginx image. It captures screenshots after the recruiter successfully loads ATS Operations, ATS Autonomy, and the AI Interview Suite. The browser check is isolated from the production smoke stack, does not contact external identity or messaging systems, and retains images and Compose logs only as CI artifacts.
+
 The same hosted smoke job also runs `scripts/run-backup-restore-smoke.sh`. It starts only a disposable MongoDB container, writes one tenant-scoped synthetic recovery record, creates a `mongodump` archive, drops the disposable database, restores the archive with `mongorestore`, and verifies the exact synthetic record was recovered. It captures local Compose logs and removes the entire temporary project and volumes. This validates executable backup-and-restore mechanics without handling organization data; production backup retention, encryption ownership, access control, and restoration evidence remain subject to the separate provider-controlled procedure.
 
 The disposable recovery check passed on the hosted runner for commit `d40dde5` ([run 32435966679](https://github.com/lone-wolf-J/EAROS/actions/runs/32435966679)).
@@ -86,7 +88,7 @@ The workflow writes these values only to temporary ignored files, executes `scri
 
 ## Authenticated browser workflow
 
-After the runtime command succeeds, use the same non-production test user in a browser. Sign in through the approved staging identity flow and capture the following evidence: ATS Operations loads, candidates and pipeline load for the allowed tenant, offers and interviews load without provider delivery, and a second-tenant candidate cannot be opened. Exercise one policy-requiring action only if the test tenant’s approval configuration has been reviewed; confirm that it produces an approval record rather than an immediate irreversible action.
+After the runtime command succeeds, use the same non-production test user in a browser. Sign in through the approved staging identity flow and capture the following evidence: ATS Operations loads, candidates and pipeline load for the allowed tenant, offers and interviews load without provider delivery, and a second-tenant candidate cannot be opened. Exercise one policy-requiring action only if the test tenant’s approval configuration has been reviewed; confirm that it produces an approval record rather than an immediate irreversible action. The hosted browser smoke is a disposable pseudo-login check only; it does not replace this organization-owned staging evidence.
 
 ## Completion rule
 
