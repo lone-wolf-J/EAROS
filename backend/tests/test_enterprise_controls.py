@@ -1083,6 +1083,87 @@ def test_career_site_application_requires_consent_and_creates_canonical_records(
     assert ("event", "world.career_site_application.received", "public:career_site") in calls
 
 
+def test_career_site_withdrawal_requires_private_reference_and_preserves_application_provenance(monkeypatch):
+    calls = []
+    reference = "w" * 48
+    application = server.Application(
+        organization_id="org_alpha",
+        candidate_id="cand_alpha",
+        requisition_id="req_alpha",
+        current_stage_name="Interview",
+        stage_history=[{"stage_name": "Applied", "actor_user_id": "public:career_site"}],
+        withdrawal_token_hash=server._withdrawal_reference_hash(reference),
+    )
+
+    class _World:
+        async def get_application_by_id(self, application_id):
+            calls.append(("lookup", application_id))
+            return application if application_id == application.application_id else None
+
+        async def upsert_application(self, updated):
+            calls.append(("upsert", updated.organization_id, updated.status.value, updated.current_stage_name))
+            return updated
+
+        async def record_activity(self, activity):
+            calls.append(("activity", activity.organization_id, activity.event_type))
+            return activity
+
+    class _Governance:
+        async def emit(self, event):
+            calls.append(("event", event.organization_id, event.event_type.value, event.actor))
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    request = server.CareerSiteApplicationWithdrawalRequest(
+        withdrawal_reference=reference, reason="I accepted another opportunity."
+    )
+
+    result = asyncio.run(server.withdraw_career_site_application(application.application_id, request))
+
+    assert result["status"] == "withdrawn"
+    assert application.status is server.ApplicationStatus.WITHDRAWN
+    assert application.current_stage_name == "Withdrawn"
+    assert application.withdrawal_reason == "I accepted another opportunity."
+    assert application.stage_history[-1]["actor_user_id"] == "public:candidate_withdrawal"
+    assert ("upsert", "org_alpha", "withdrawn", "Withdrawn") in calls
+    assert ("event", "org_alpha", "world.application.withdrawn", "public:candidate_withdrawal") in calls
+    assert ("activity", "org_alpha", "application.withdrawn_by_candidate") in calls
+
+
+def test_career_site_withdrawal_rejects_invalid_private_reference_without_mutation(monkeypatch):
+    application = server.Application(
+        organization_id="org_beta",
+        candidate_id="cand_beta",
+        withdrawal_token_hash=server._withdrawal_reference_hash("z" * 48),
+    )
+
+    class _World:
+        async def get_application_by_id(self, _application_id):
+            return application
+
+        async def upsert_application(self, _updated):
+            raise AssertionError("An invalid public reference must not persist an application change")
+
+        async def record_activity(self, _activity):
+            raise AssertionError("An invalid public reference must not create activity")
+
+    class _Governance:
+        async def emit(self, _event):
+            raise AssertionError("An invalid public reference must not emit an event")
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(server.withdraw_career_site_application(
+            application.application_id,
+            server.CareerSiteApplicationWithdrawalRequest(withdrawal_reference="x" * 48),
+        ))
+
+    assert exc.value.status_code == 404
+    assert application.status is server.ApplicationStatus.ACTIVE
+
+
 def test_referral_intake_requires_enabled_requisition_and_validates_referrer(monkeypatch):
     calls = []
     requisition = server.Requisition(

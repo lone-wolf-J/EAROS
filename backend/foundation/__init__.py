@@ -219,6 +219,7 @@ class EventType(str, Enum):
     CANDIDATE_BULK_UPDATED = "world.candidate.bulk_updated"
     APPLICATION_CREATED = "world.application.created"
     CAREER_SITE_APPLICATION_RECEIVED = "world.career_site_application.received"
+    APPLICATION_WITHDRAWN = "world.application.withdrawn"
     REFERRAL_INTAKE_RECORDED = "world.referral_intake.recorded"
     APPLICATION_STAGE_CHANGED = "world.application.stage_changed"
     REQUISITION_CREATED = "world.requisition.created"

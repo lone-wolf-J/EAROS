@@ -13,10 +13,12 @@ which enforces Policy and delegates to Capabilities.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import json
 import logging
 import os
+import secrets
 import time
 import uuid
 from collections import Counter
@@ -36,6 +38,7 @@ load_dotenv(ROOT_DIR / ".env")
 from applications.auth import AppUser, build_router as build_auth_router, get_current_user, validate_production_auth_configuration
 from foundation import (
     AuditExportStatus,
+    ApplicationStatus,
     DataSubjectRequestStatus,
     DomainEvent,
     EventType,
@@ -831,6 +834,12 @@ class CareerSiteApplicationRequest(BaseModel):
     application_answers: list[dict[str, Any]] = Field(default_factory=list, max_length=40)
 
 
+class CareerSiteApplicationWithdrawalRequest(BaseModel):
+    """A one-time public reference authorizes withdrawal of only the submitted application."""
+    withdrawal_reference: str = Field(min_length=32, max_length=256)
+    reason: Optional[str] = Field(default=None, max_length=1000)
+
+
 class ReferralIntakeRequest(BaseModel):
     full_name: str = Field(min_length=2, max_length=200)
     email: Optional[str] = Field(default=None, max_length=320)
@@ -1112,6 +1121,11 @@ def _validated_application_answers(questions: list[dict[str, Any]], answers: lis
             for question_id, value in supplied.items()]
 
 
+def _withdrawal_reference_hash(reference: str) -> str:
+    """Keep only a digest of a high-entropy public withdrawal reference at rest."""
+    return hashlib.sha256(reference.encode("utf-8")).hexdigest()
+
+
 @app.get("/api/public/ats/career-sites/{organization_id}/requisitions")
 async def list_public_career_site_requisitions(organization_id: str):
     """Return only enabled public requisition metadata; never private plans or candidate data."""
@@ -1188,6 +1202,7 @@ async def submit_career_site_application(requisition_id: str, req: CareerSiteApp
     if any(application.status.value == "active" for application in existing):
         raise HTTPException(status_code=409, detail="An active application already exists for this requisition")
     now = utcnow_iso()
+    withdrawal_reference = secrets.token_urlsafe(32)
     application = await world.upsert_application(Application(
         organization_id=req.organization_id,
         candidate_id=candidate.candidate_id,
@@ -1198,6 +1213,7 @@ async def submit_career_site_application(requisition_id: str, req: CareerSiteApp
         source_detail=f"career_site:{requisition_id}",
         application_answers=application_answers,
         stage_history=[{"stage_id": None, "stage_name": "Applied", "changed_at": now, "actor_user_id": "public:career_site"}],
+        withdrawal_token_hash=_withdrawal_reference_hash(withdrawal_reference),
     ))
     await governance.emit(DomainEvent(
         event_type=EventType.CAREER_SITE_APPLICATION_RECEIVED,
@@ -1215,7 +1231,59 @@ async def submit_career_site_application(requisition_id: str, req: CareerSiteApp
         actor_user_id=None,
         payload={"candidate_id": candidate.candidate_id, "requisition_id": requisition_id, "consent_id": consent.consent_id},
     ))
-    return {"application_id": application.application_id, "received_at": application.applied_at, "status": "received"}
+    return {
+        "application_id": application.application_id,
+        "received_at": application.applied_at,
+        "status": "received",
+        "withdrawal_reference": withdrawal_reference,
+    }
+
+
+@app.post("/api/public/ats/applications/{application_id}/withdraw")
+async def withdraw_career_site_application(
+    application_id: str, req: CareerSiteApplicationWithdrawalRequest
+):
+    """Withdraw one active career-site application using a reference returned only at submission time."""
+    application = await world.get_application_by_id(application_id)
+    reference_hash = _withdrawal_reference_hash(req.withdrawal_reference)
+    if not application or not application.withdrawal_token_hash or not hmac.compare_digest(
+        application.withdrawal_token_hash, reference_hash
+    ):
+        raise HTTPException(status_code=404, detail="Application withdrawal reference is not available")
+    application_status = getattr(application.status, "value", application.status)
+    if application_status != ApplicationStatus.ACTIVE.value:
+        raise HTTPException(status_code=409, detail="Only active applications can be withdrawn")
+    now = utcnow_iso()
+    application.status = ApplicationStatus.WITHDRAWN
+    application.current_stage_id = None
+    application.current_stage_name = "Withdrawn"
+    application.withdrawn_at = now
+    application.withdrawal_reason = req.reason.strip() if req.reason else None
+    application.stage_history.append({
+        "stage_id": None,
+        "stage_name": "Withdrawn",
+        "changed_at": now,
+        "actor_user_id": "public:candidate_withdrawal",
+        "reason": application.withdrawal_reason,
+    })
+    application = await world.upsert_application(application)
+    await governance.emit(DomainEvent(
+        event_type=EventType.APPLICATION_WITHDRAWN,
+        actor="public:candidate_withdrawal",
+        subject_type="application",
+        subject_id=application.application_id,
+        organization_id=application.organization_id,
+        payload={"candidate_id": application.candidate_id, "requisition_id": application.requisition_id},
+    ))
+    await world.record_activity(ActivityRecord(
+        organization_id=application.organization_id,
+        entity_type="application",
+        entity_id=application.application_id,
+        event_type="application.withdrawn_by_candidate",
+        actor_user_id=None,
+        payload={"candidate_id": application.candidate_id, "requisition_id": application.requisition_id},
+    ))
+    return {"application_id": application.application_id, "status": "withdrawn", "withdrawn_at": application.withdrawn_at}
 
 
 @app.post("/api/ats/requisitions/{requisition_id}/referrals", status_code=201)

@@ -8,6 +8,7 @@ export const CAREER_SITE_GUARDRAILS = [
   "recruiting_consent_is_required_before_submission",
   "candidate_and_application_records_use_canonical_ats_models",
   "requisition_configured_questions_are_validated_and_stored_canonically",
+  "candidate_withdrawal_requires_a_one_time_reference_and_preserves_application_provenance",
   "submission_never_triggers_outbound_automation",
 ];
 
@@ -22,6 +23,10 @@ export default function CareerSite() {
   const [submitError, setSubmitError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(null);
+  const [withdrawal, setWithdrawal] = useState({ applicationId: "", withdrawalReference: "", reason: "" });
+  const [withdrawalError, setWithdrawalError] = useState("");
+  const [withdrawalResult, setWithdrawalResult] = useState(null);
+  const [withdrawing, setWithdrawing] = useState(false);
   const [answers, setAnswers] = useState({});
   const [form, setForm] = useState({
     requisitionId: "",
@@ -93,11 +98,35 @@ export default function CareerSite() {
         })),
       });
       setSubmitted(data);
+      setWithdrawal((previous) => ({ ...previous, applicationId: data.application_id, withdrawalReference: data.withdrawal_reference || "" }));
     } catch (error) {
       const detail = error?.response?.data?.detail;
       setSubmitError(typeof detail === "string" ? detail : "Your application could not be recorded. Please verify the role is still open and try again.");
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const withdraw = async (event) => {
+    event.preventDefault();
+    setWithdrawalError("");
+    setWithdrawalResult(null);
+    if (!withdrawal.applicationId || !withdrawal.withdrawalReference) {
+      setWithdrawalError("Enter the application reference and the one-time withdrawal reference.");
+      return;
+    }
+    setWithdrawing(true);
+    try {
+      const { data } = await api.post(`/public/ats/applications/${encodeURIComponent(withdrawal.applicationId)}/withdraw`, {
+        withdrawal_reference: withdrawal.withdrawalReference,
+        reason: withdrawal.reason || null,
+      });
+      setWithdrawalResult(data);
+    } catch (error) {
+      const detail = error?.response?.data?.detail;
+      setWithdrawalError(typeof detail === "string" ? detail : "This application could not be withdrawn. Verify both references and try again.");
+    } finally {
+      setWithdrawing(false);
     }
   };
 
@@ -127,6 +156,7 @@ export default function CareerSite() {
               <CheckCircle2 className="mb-2 h-6 w-6" />
               <div className="font-display text-xl font-black">Application recorded</div>
               <p className="mt-1 text-sm text-emerald-100/80">Reference: <span className="font-mono2">{submitted.application_id}</span>. A hiring team member will review your application through their governed workflow.</p>
+              {submitted.withdrawal_reference && <div data-testid="career-site-withdrawal-reference" className="mt-4 rounded-sm border border-emerald-200/20 bg-slate-950/30 p-3 text-sm text-emerald-50"><strong>Save this private withdrawal reference now:</strong> <span className="mt-1 block break-all font-mono2 text-xs">{submitted.withdrawal_reference}</span><span className="mt-2 block text-emerald-100/80">EAROS does not send this reference by email. It is required only if you later choose to withdraw this application.</span></div>}
             </div>
           ) : (
             <form className="mt-7 space-y-4" onSubmit={submit}>
@@ -143,6 +173,18 @@ export default function CareerSite() {
               <button type="submit" disabled={submitting || loading || !requisitions.length} className="w-full rounded-sm bg-gradient-to-r from-violet-600 to-teal-500 px-4 py-3 font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50">{submitting ? "Recording application…" : "Submit application"}</button>
             </form>
           )}
+          <section className="mt-7 border-t border-slate-800 pt-6" aria-labelledby="withdraw-application-title">
+            <div className="font-mono2 text-[10px] tracking-[0.18em] text-slate-400">CANDIDATE SELF-SERVICE</div>
+            <h3 id="withdraw-application-title" className="mt-1 font-display text-lg font-black text-slate-100">Withdraw an application</h3>
+            <p className="mt-1 text-sm leading-6 text-slate-400">Withdrawal ends only the active application. It does not erase personal data, revoke recruiting consent, or send a message. Those actions remain separately governed.</p>
+            {withdrawalResult ? <p data-testid="career-site-withdrawal-confirmation" className="mt-3 rounded-sm border border-emerald-400/25 bg-emerald-400/10 px-3 py-2 text-sm text-emerald-100">Application <span className="font-mono2">{withdrawalResult.application_id}</span> was withdrawn.</p> : <form className="mt-4 space-y-3" onSubmit={withdraw}>
+              <label className="block space-y-1.5"><span className="font-mono2 text-[10px] tracking-widest text-slate-400">APPLICATION REFERENCE</span><input className={inputClass} value={withdrawal.applicationId} onChange={(event) => setWithdrawal((previous) => ({ ...previous, applicationId: event.target.value }))} required /></label>
+              <label className="block space-y-1.5"><span className="font-mono2 text-[10px] tracking-widest text-slate-400">PRIVATE WITHDRAWAL REFERENCE</span><input className={inputClass} type="password" autoComplete="off" value={withdrawal.withdrawalReference} onChange={(event) => setWithdrawal((previous) => ({ ...previous, withdrawalReference: event.target.value }))} required /></label>
+              <label className="block space-y-1.5"><span className="font-mono2 text-[10px] tracking-widest text-slate-400">OPTIONAL NOTE</span><textarea className={inputClass} value={withdrawal.reason} onChange={(event) => setWithdrawal((previous) => ({ ...previous, reason: event.target.value }))} /></label>
+              {withdrawalError && <p className="rounded-sm border border-rose-500/25 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{withdrawalError}</p>}
+              <button type="submit" disabled={withdrawing} className="rounded-sm border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-200 transition hover:border-teal-400 hover:text-teal-200 disabled:cursor-not-allowed disabled:opacity-50">{withdrawing ? "Withdrawing application…" : "Withdraw application"}</button>
+            </form>}
+          </section>
         </section>
       </section>
     </main>

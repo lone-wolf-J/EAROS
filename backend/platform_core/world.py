@@ -305,6 +305,9 @@ class Application(BaseModel):
     skill_gaps: list[str] = Field(default_factory=list)
     application_answers: list[dict[str, Any]] = Field(default_factory=list)
     stage_history: list[dict[str, Any]] = Field(default_factory=list)
+    withdrawal_token_hash: Optional[str] = None
+    withdrawal_reason: Optional[str] = None
+    withdrawn_at: Optional[str] = None
     applied_at: str = Field(default_factory=utcnow_iso)
     created_at: str = Field(default_factory=utcnow_iso)
     updated_at: str = Field(default_factory=utcnow_iso)
@@ -986,6 +989,11 @@ class WorldState:
         doc = await self.db.applications.find_one(
             {"organization_id": organization_id, "application_id": application_id}, {"_id": 0}
         )
+        return Application(**doc) if doc else None
+
+    async def get_application_by_id(self, application_id: str) -> Optional[Application]:
+        """Lookup is reserved for public token validation; callers must not expose the result before verification."""
+        doc = await self.db.applications.find_one({"application_id": application_id}, {"_id": 0})
         return Application(**doc) if doc else None
 
     async def list_applications(
