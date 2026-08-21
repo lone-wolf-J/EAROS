@@ -108,6 +108,9 @@ def test_self_contained_compose_smoke_is_built_and_exercised_in_ci() -> None:
     assert "scripts/run-infrastructure-smoke.sh" in workflow
     assert '"docker-compose.infrastructure-smoke.yml"' in workflow
     assert '"backend/requirements.txt"' in workflow
+    assert '"backend/server.py"' in workflow
+    assert '"backend/platform_core/**"' in workflow
+    assert '"frontend/src/**"' in workflow
 
 
 def test_disposable_backup_restore_smoke_proves_recovery_without_external_data() -> None:
