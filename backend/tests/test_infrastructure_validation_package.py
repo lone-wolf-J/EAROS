@@ -117,6 +117,14 @@ def test_required_container_dependencies_exclude_optional_private_llm_client() -
     assert "try:" in intake and "except Exception:" in intake
 
 
+def test_required_container_dependencies_include_production_auth_http_client() -> None:
+    requirements = (REPOSITORY_ROOT / "backend" / "requirements.txt").read_text(encoding="utf8")
+    auth = (REPOSITORY_ROOT / "backend" / "applications" / "auth.py").read_text(encoding="utf8")
+
+    assert "import httpx" in auth
+    assert "httpx>=" in requirements
+
+
 def test_frontend_container_installs_build_tooling_before_production_runtime() -> None:
     dockerfile = (REPOSITORY_ROOT / "frontend" / "Dockerfile").read_text(encoding="utf8")
 
