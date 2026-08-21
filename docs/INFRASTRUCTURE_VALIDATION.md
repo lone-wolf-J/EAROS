@@ -52,10 +52,18 @@ node scripts/verify-backup-evidence.mjs /secure/path/backup-restore-evidence.jso
 
 The repository includes a manual workflow at `.github/workflows/infrastructure-validation.yml`. It always checks the validation package on relevant changes. Its Docker runtime job runs only when a maintainer manually selects `run_runtime=true`; it reads non-production values only from the dedicated `earos-staging` environment.
 
+The same workflow also runs `scripts/run-infrastructure-smoke.sh` on a hosted Docker-capable runner for every relevant push or pull request. This self-contained job builds the API and frontend images, starts an ephemeral MongoDB 7 service, verifies the API readiness endpoint, verifies that Nginx serves the EAROS application shell, saves Docker logs as a CI artifact, and removes its containers and volumes. It does not provision users, invoke the upstream identity service, contact a job board, or use organization secrets.
+
 | Approach | Tradeoffs | Cost | Setup complexity |
 | --- | --- | --- | --- |
 | Run on your staging host | The nearest match to the eventual deployment; the database and identity endpoint can remain inside your private network. | Uses your existing staging host. | Copy the two templates, create the non-production records, and run one command. |
 | Run the manual repository workflow | Uses a temporary Docker-capable runner and retains the workflow log as evidence; the staging database must be reachable from that runner. | Uses your repository’s CI allowance. | Add the two multiline secrets to the dedicated `earos-staging` environment, then manually run the workflow. |
+
+Run the self-contained stack locally on any Docker-capable host with:
+
+```bash
+bash scripts/run-infrastructure-smoke.sh
+```
 
 For the manual workflow, add these **environment secrets**, never repository variables or source files:
 

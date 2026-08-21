@@ -79,3 +79,23 @@ jobs:
       - name: Remove protected material
         if: always()
         run: rm -f backend/.env ops/staging-validation.env
+
+  self-contained-compose-smoke:
+    name: Self-contained Compose smoke runtime
+    needs: package-contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build and start the non-secret EAROS smoke stack
+        run: bash scripts/run-infrastructure-smoke.sh
+      - name: Upload smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: earos-infrastructure-smoke-logs
+          path: /tmp/earos-infrastructure-smoke.log
+          if-no-files-found: ignore

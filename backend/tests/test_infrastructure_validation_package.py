@@ -89,3 +89,19 @@ def test_ci_workflow_keeps_runtime_execution_manual_and_secret_backed() -> None:
     assert "secrets.EAROS_STAGING_VALIDATION_ENV" in workflow
     assert "bash scripts/run-compose-validation.sh" in workflow
     assert "rm -f backend/.env ops/staging-validation.env" in workflow
+
+
+def test_self_contained_compose_smoke_is_built_and_exercised_in_ci() -> None:
+    compose = (REPOSITORY_ROOT / "docker-compose.infrastructure-smoke.yml").read_text(encoding="utf8")
+    harness = (REPOSITORY_ROOT / "scripts" / "run-infrastructure-smoke.sh").read_text(encoding="utf8")
+    workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "infrastructure-validation.yml").read_text(encoding="utf8")
+
+    assert "mongo:7.0" in compose
+    assert "EAROS_ENV: production" in compose
+    assert "EAROS_ENABLE_DEV_LOGIN: \"false\"" in compose
+    assert "condition: service_healthy" in compose
+    assert "docker compose" in harness
+    assert "/api/ready" in harness
+    assert "EAROS frontend container" in harness
+    assert "down --volumes --remove-orphans" in harness
+    assert "scripts/run-infrastructure-smoke.sh" in workflow

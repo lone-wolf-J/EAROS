@@ -1,0 +1,48 @@
+services:
+  mongo:
+    image: mongo:7.0
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ ping: 1 }).ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+      DB_NAME: earos_infrastructure_smoke
+      EAROS_ENV: production
+      AUTH_SESSION_DATA_URL: https://identity.example.invalid/session-data
+      EAROS_ENABLE_DEV_LOGIN: "false"
+      CORS_ORIGINS: http://127.0.0.1:18080
+      EAROS_COOKIE_SECURE: "true"
+      EAROS_LOG_LEVEL: INFO
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: "no"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8000/api/ready || exit 1"]
+      interval: 5s
+      timeout: 5s
+      start_period: 10s
+      retries: 12
+    ports:
+      - "127.0.0.1:18000:8000"
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_BACKEND_URL: https://api.example.invalid
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: "no"
+    ports:
+      - "127.0.0.1:18080:8080"
