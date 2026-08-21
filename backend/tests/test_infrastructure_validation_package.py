@@ -115,3 +115,10 @@ def test_required_container_dependencies_exclude_optional_private_llm_client() -
     assert "emergentintegrations" not in requirements
     assert "try:" in planner and "except Exception:" in planner
     assert "try:" in intake and "except Exception:" in intake
+
+
+def test_frontend_container_installs_build_tooling_before_production_runtime() -> None:
+    dockerfile = (REPOSITORY_ROOT / "frontend" / "Dockerfile").read_text(encoding="utf8")
+
+    assert "yarn install --frozen-lockfile --ignore-engines --production=false" in dockerfile
+    assert "FROM nginx:1.27-alpine\nENV NODE_ENV=production" in dockerfile
