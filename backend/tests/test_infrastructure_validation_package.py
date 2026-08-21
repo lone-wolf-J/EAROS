@@ -110,6 +110,20 @@ def test_self_contained_compose_smoke_is_built_and_exercised_in_ci() -> None:
     assert '"backend/requirements.txt"' in workflow
 
 
+def test_disposable_backup_restore_smoke_proves_recovery_without_external_data() -> None:
+    harness = (REPOSITORY_ROOT / "scripts" / "run-backup-restore-smoke.sh").read_text(encoding="utf8")
+    workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "infrastructure-validation.yml").read_text(encoding="utf8")
+
+    assert "earos_backup_restore_smoke" in harness
+    assert "org_backup_smoke" in harness
+    assert "mongodump" in harness
+    assert "dropDatabase" in harness
+    assert "mongorestore" in harness
+    assert "down --volumes --remove-orphans" in harness
+    assert "scripts/run-backup-restore-smoke.sh" in workflow
+    assert "/tmp/earos-backup-restore-smoke.log" in workflow
+
+
 def test_isolated_authenticated_smoke_never_enables_dev_login_in_production_stack() -> None:
     production_smoke = (REPOSITORY_ROOT / "docker-compose.infrastructure-smoke.yml").read_text(encoding="utf8")
     authenticated_smoke = (REPOSITORY_ROOT / "docker-compose.infrastructure-auth-smoke.yml").read_text(encoding="utf8")

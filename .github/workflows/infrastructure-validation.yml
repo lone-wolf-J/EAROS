@@ -102,6 +102,8 @@ jobs:
         run: bash scripts/run-infrastructure-smoke.sh
       - name: Exercise isolated authenticated recruiting reads
         run: bash scripts/run-infrastructure-auth-smoke.sh
+      - name: Exercise disposable backup and restore recovery
+        run: bash scripts/run-backup-restore-smoke.sh
       - name: Upload smoke logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -110,4 +112,5 @@ jobs:
           path: |
             /tmp/earos-infrastructure-smoke.log
             /tmp/earos-infrastructure-auth-smoke.log
+            /tmp/earos-backup-restore-smoke.log
           if-no-files-found: ignore
