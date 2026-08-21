@@ -326,7 +326,7 @@ export default function ATSOperations() {
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-4 pt-3">
               <div className="flex flex-wrap gap-1">
                 {TABS.map(({ key, label, icon: Icon }) => (
-                  <button key={key} onClick={() => setTab(key)} className={`inline-flex items-center gap-2 border-b-2 px-3 py-3 font-mono2 text-[11px] tracking-wide transition ${tab === key ? "border-teal-400 text-white" : "border-transparent text-slate-500 hover:text-slate-200"}`}>
+                  <button key={key} data-testid={`ats-tab-${key}`} aria-pressed={tab === key} onClick={() => setTab(key)} className={`inline-flex items-center gap-2 border-b-2 px-3 py-3 font-mono2 text-[11px] tracking-wide transition ${tab === key ? "border-teal-400 text-white" : "border-transparent text-slate-500 hover:text-slate-200"}`}>
                     <Icon className="h-3.5 w-3.5" /> {label}
                   </button>
                 ))}
@@ -336,7 +336,7 @@ export default function ATSOperations() {
               </button>}
             </div>
 
-            <div className="p-4">
+            <div data-testid={`ats-workspace-${tab}`} className="p-4">
               {tab === "requisitions" && (requisitions.length ? (
                 <div className="divide-y divide-slate-800 overflow-hidden rounded-sm border border-slate-800">
                   {requisitions.map((requisition) => (

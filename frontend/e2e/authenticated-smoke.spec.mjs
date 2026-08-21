@@ -10,6 +10,13 @@ const routes = [
   { path: "/interview", rootTestId: "interview-suite-root", image: "interview.png" },
 ];
 
+const coreAtsTabs = [
+  { key: "candidates", image: "ats-candidates.png" },
+  { key: "applications", image: "ats-applications.png" },
+  { key: "interviews", image: "ats-interviews.png" },
+  { key: "offers", image: "ats-offers.png" },
+];
+
 test("synthetic recruiter can load compiled protected recruiter workflows", async ({ page, context }) => {
   await page.goto(`${webBase}/`, { waitUntil: "domcontentloaded" });
   const loginStatus = await page.evaluate(async () => {
@@ -29,5 +36,13 @@ test("synthetic recruiter can load compiled protected recruiter workflows", asyn
     await expect(page).toHaveURL(new RegExp(`${route.path.replaceAll("/", "\\/")}$`));
     await expect(page.getByTestId(route.rootTestId)).toBeVisible({ timeout: 30_000 });
     await page.screenshot({ path: `${screenshotDir}/${route.image}`, fullPage: true });
+  }
+
+  await page.goto(`${webBase}/ats`, { waitUntil: "domcontentloaded" });
+  await expect(page.getByTestId("ats-operations-root")).toBeVisible({ timeout: 30_000 });
+  for (const tab of coreAtsTabs) {
+    await page.getByTestId(`ats-tab-${tab.key}`).click();
+    await expect(page.getByTestId(`ats-workspace-${tab.key}`)).toBeVisible();
+    await page.screenshot({ path: `${screenshotDir}/${tab.image}`, fullPage: true });
   }
 });

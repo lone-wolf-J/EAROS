@@ -160,6 +160,13 @@ def test_authenticated_browser_smoke_remains_disposable_and_exercises_compiled_r
     assert 'path: "/ats/workflows", rootTestId: "ats-autonomy-root"' in browser_test
     assert 'path: "/interview", rootTestId: "interview-suite-root"' in browser_test
     assert "getByTestId(route.rootTestId)).toBeVisible" in browser_test
+    assert 'const coreAtsTabs = [' in browser_test
+    assert 'key: "candidates"' in browser_test
+    assert 'key: "applications"' in browser_test
+    assert 'key: "interviews"' in browser_test
+    assert 'key: "offers"' in browser_test
+    assert 'getByTestId(`ats-tab-${tab.key}`).click()' in browser_test
+    assert 'getByTestId(`ats-workspace-${tab.key}`)).toBeVisible()' in browser_test
     assert "VITE_BACKEND_URL: http://127.0.0.1:18080" in auth_compose
     assert 'VITE_EAROS_ALLOW_INSECURE_LOCAL_SMOKE: "true"' in auth_compose
     assert "nginx.infrastructure-auth-smoke.conf:/etc/nginx/conf.d/default.conf:ro" in auth_compose

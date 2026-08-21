@@ -21,6 +21,15 @@ describe("ATS Operations route contract", () => {
     ]);
   });
 
+  it("keeps the core recruiter tabs available for deterministic authenticated workflow validation", () => {
+    expect(TABS.filter((tab) => ["candidates", "applications", "interviews", "offers"].includes(tab.key)).map((tab) => tab.key)).toEqual([
+      "candidates",
+      "applications",
+      "interviews",
+      "offers",
+    ]);
+  });
+
   it("renders an explicit empty date placeholder rather than leaking invalid values", () => {
     expect(formatDate(null)).toBe("—");
   });
