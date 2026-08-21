@@ -54,6 +54,8 @@ The repository includes a manual workflow at `.github/workflows/infrastructure-v
 
 The same workflow also runs `scripts/run-infrastructure-smoke.sh` on a hosted Docker-capable runner for every relevant push or pull request. This self-contained job builds the API and frontend images, starts an ephemeral MongoDB 7 service, verifies the API readiness endpoint, verifies that Nginx serves the EAROS application shell, saves Docker logs as a CI artifact, and removes its containers and volumes. It does not provision users, invoke the upstream identity service, contact a job board, or use organization secrets.
 
+The API’s optional `emergentintegrations` client is intentionally not part of the required container dependency set because it is unavailable from the public Python package index. EAROS imports it dynamically only for optional model-backed planning and intake; when it is unavailable, the governed planner and intake path use their deterministic fallback behavior. A production deployment that has an approved internal package source may install that enhancement separately after the base image, but it must not weaken the self-contained operational baseline.
+
 | Approach | Tradeoffs | Cost | Setup complexity |
 | --- | --- | --- | --- |
 | Run on your staging host | The nearest match to the eventual deployment; the database and identity endpoint can remain inside your private network. | Uses your existing staging host. | Copy the two templates, create the non-production records, and run one command. |

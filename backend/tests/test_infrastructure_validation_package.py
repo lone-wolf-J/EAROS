@@ -105,3 +105,13 @@ def test_self_contained_compose_smoke_is_built_and_exercised_in_ci() -> None:
     assert "EAROS frontend container" in harness
     assert "down --volumes --remove-orphans" in harness
     assert "scripts/run-infrastructure-smoke.sh" in workflow
+
+
+def test_required_container_dependencies_exclude_optional_private_llm_client() -> None:
+    requirements = (REPOSITORY_ROOT / "backend" / "requirements.txt").read_text(encoding="utf8")
+    planner = (REPOSITORY_ROOT / "backend" / "platform_core" / "planner.py").read_text(encoding="utf8")
+    intake = (REPOSITORY_ROOT / "backend" / "intelligence" / "intake.py").read_text(encoding="utf8")
+
+    assert "emergentintegrations" not in requirements
+    assert "try:" in planner and "except Exception:" in planner
+    assert "try:" in intake and "except Exception:" in intake
