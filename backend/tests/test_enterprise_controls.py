@@ -2078,6 +2078,108 @@ def test_interview_debrief_requires_linked_feedback_and_preserves_application_st
     assert no_feedback.value.status_code == 409
 
 
+def test_offer_versions_extension_approval_and_candidate_response_remain_governed(monkeypatch):
+    calls = []
+    offer = server.Offer(
+        organization_id="org_alpha", offer_id="offer_alpha", candidate_id="cand_alpha", job_id="job_alpha",
+        base_salary=150000, currency="USD", current_version_id="version_one",
+    )
+    version = server.OfferVersion(
+        organization_id="org_alpha", offer_version_id="version_one", offer_id="offer_alpha", version_number=1,
+        base_salary=150000, currency="USD", created_by_user_id="recruiter_alpha",
+    )
+    versions = {version.offer_version_id: version}
+    approvals = []
+    extension_requests = {}
+
+    class _World:
+        async def get_offer(self, organization_id, offer_id):
+            return offer if (organization_id, offer_id) == ("org_alpha", "offer_alpha") else None
+
+        async def list_offer_versions(self, organization_id, offer_id):
+            return list(versions.values()) if (organization_id, offer_id) == ("org_alpha", "offer_alpha") else []
+
+        async def create_offer_version(self, created):
+            versions[created.offer_version_id] = created
+            calls.append(("version", created.version_number, created.offer_id))
+            return created
+
+        async def get_offer_version(self, organization_id, offer_version_id):
+            return versions.get(offer_version_id) if organization_id == "org_alpha" else None
+
+        async def upsert_offer(self, updated):
+            calls.append(("upsert_offer", getattr(updated.status, "value", updated.status), updated.current_version_id))
+            return updated
+
+        async def create_offer_extension_request(self, request):
+            extension_requests[request.offer_extension_request_id] = request
+            return request
+
+        async def get_offer_extension_request(self, organization_id, request_id):
+            request = extension_requests.get(request_id)
+            return request if request and organization_id == "org_alpha" else None
+
+        async def resolve_offer_extension_request(self, organization_id, request_id, *, status, resolved_by_user_id):
+            request = extension_requests.get(request_id)
+            if request and organization_id == "org_alpha" and request.status == "awaiting_approval":
+                request.status = status; request.resolved_by_user_id = resolved_by_user_id
+            return request
+
+        async def record_offer_candidate_response(self, response):
+            calls.append(("candidate_response", response.response, response.offer_id))
+            return response
+
+        async def record_activity(self, activity):
+            calls.append(("activity", activity.event_type, activity.entity_id))
+            return activity
+
+    class _Governance:
+        async def request_approval(self, approval):
+            approvals.append(approval); return approval
+
+        async def list_approvals(self, _organization_id):
+            return approvals
+
+        async def decide_approval(self, approval_id, decision, user_id, note):
+            approval = next(item for item in approvals if item.approval_id == approval_id)
+            approval.status = decision; approval.decided_by = user_id; return approval
+
+        async def emit(self, event):
+            calls.append(("event", event.event_type.value, event.subject_id)); return event
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    monkeypatch.setattr(server, "_record_lifecycle_candidate_notification", lambda **_kwargs: asyncio.sleep(0))
+    recruiter = SimpleNamespace(user_id="recruiter_alpha", organization_id="org_alpha", role=Role.RECRUITER)
+    manager = SimpleNamespace(user_id="manager_alpha", organization_id="org_alpha", role=Role.HIRING_MANAGER)
+
+    created_version = asyncio.run(server.create_ats_offer_version(
+        "offer_alpha", server.OfferVersionCreateRequest(base_salary=160000, currency="USD", terms={"start_date": "2026-10-01"}), recruiter
+    ))
+    assert created_version["version_number"] == 2
+    assert offer.status is server.OfferStatus.DRAFT
+
+    request = asyncio.run(server.create_ats_offer_extension_request(
+        "offer_alpha", server.OfferExtensionRequestCreateRequest(rationale="Compensation package was reviewed against the approved hiring plan."), recruiter
+    ))
+    approval_id = request["approval"]["approval_id"]
+    with pytest.raises(HTTPException) as self_approval:
+        asyncio.run(server.decide_approval(approval_id, server.DecideApprovalRequest(decision="granted"), recruiter))
+    assert self_approval.value.status_code == 403
+
+    resolved = asyncio.run(server.decide_approval(approval_id, server.DecideApprovalRequest(decision="granted"), manager))
+    assert resolved["offer_extension_request"]["status"] == "effective"
+    assert offer.status is server.OfferStatus.EXTENDED
+
+    response = asyncio.run(server.record_ats_offer_candidate_response(
+        "offer_alpha", server.OfferCandidateResponseCreateRequest(response="accepted", note="Candidate accepted the recorded package."), recruiter
+    ))
+    assert response["response"] == "accepted"
+    assert offer.status is server.OfferStatus.ACCEPTED
+    assert any(call[0] == "event" and call[1] == "world.offer.extension_effective" for call in calls)
+    assert any(call[0] == "event" and call[1] == "world.offer.candidate_response_recorded" for call in calls)
+
+
 def test_operational_requisition_request_preserves_complete_hiring_plan_fields():
     request = server.RequisitionCreateRequest(
         title="Senior Product Designer",
@@ -2116,6 +2218,10 @@ def test_offer_draft_is_tenant_scoped_audited_and_never_extended_by_creation(mon
         async def upsert_offer(self, offer):
             calls.append(("offer", offer.organization_id, offer.candidate_id, offer.status.value))
             return offer
+
+        async def create_offer_version(self, version):
+            calls.append(("version", version.offer_id, version.version_number, version.currency))
+            return version
 
         async def record_activity(self, activity):
             calls.append(("activity", activity.organization_id, activity.event_type, activity.payload["status"]))
@@ -2158,6 +2264,7 @@ def test_core_ats_lifecycle_creates_canonical_records_and_defers_final_status_to
             self.scorecards = {}
             self.feedback = {}
             self.offers = {}
+            self.offer_versions = {}
             self.decisions = {}
             self.activities = []
             self.pipeline = server.Pipeline(
@@ -2216,6 +2323,10 @@ def test_core_ats_lifecycle_creates_canonical_records_and_defers_final_status_to
         async def upsert_offer(self, offer):
             self.offers[offer.offer_id] = offer
             return offer
+
+        async def create_offer_version(self, version):
+            self.offer_versions[version.offer_version_id] = version
+            return version
 
         async def list_hiring_decisions(self, organization_id, application_id=None, **_kwargs):
             return [item for item in self.decisions.values() if item.organization_id == organization_id and (not application_id or item.application_id == application_id)]

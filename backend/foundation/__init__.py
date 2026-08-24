@@ -42,6 +42,9 @@ def new_communication_id() -> str: return _new_id("comm")
 def new_hiring_decision_id() -> str: return _new_id("hiredec")
 def new_application_reactivation_request_id() -> str: return _new_id("appreact")
 def new_offer_id() -> str: return _new_id("offer")
+def new_offer_version_id() -> str: return _new_id("offerver")
+def new_offer_extension_request_id() -> str: return _new_id("offerext")
+def new_offer_candidate_response_id() -> str: return _new_id("offerresp")
 def new_skill_id() -> str: return _new_id("skill")
 def new_policy_id() -> str: return _new_id("pol")
 def new_capability_id() -> str: return _new_id("cap")
@@ -245,6 +248,11 @@ class EventType(str, Enum):
     RECRUITER_ALERT_CREATED = "world.recruiter_alert.created"
     RECRUITER_ALERT_READ = "world.recruiter_alert.read"
     OFFER_DRAFT_CREATED = "world.offer.draft_created"
+    OFFER_VERSION_CREATED = "world.offer.version_created"
+    OFFER_EXTENSION_REQUESTED = "world.offer.extension_requested"
+    OFFER_EXTENSION_EFFECTIVE = "world.offer.extension_effective"
+    OFFER_EXTENSION_DENIED = "world.offer.extension_denied"
+    OFFER_CANDIDATE_RESPONSE_RECORDED = "world.offer.candidate_response_recorded"
     OFFER_EXTENDED = "world.offer.extended"
     JOB_CREATED = "world.job.created"
     RETENTION_CASE_REQUESTED = "world.retention_case.requested"

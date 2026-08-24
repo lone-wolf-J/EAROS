@@ -47,6 +47,9 @@ from foundation import (
     new_notification_preference_id,
     new_recruiter_alert_id,
     new_offer_id,
+    new_offer_version_id,
+    new_offer_extension_request_id,
+    new_offer_candidate_response_id,
     new_onboarding_handoff_id,
     new_organization_id,
     new_pipeline_id,
@@ -655,6 +658,55 @@ class Offer(BaseModel):
     market_percentile: float = 0.0
     internal_parity_delta: float = 0.0
     reasoning_decision_id: Optional[str] = None
+    current_version_id: Optional[str] = None
+    extension_approval_id: Optional[str] = None
+    created_at: str = Field(default_factory=utcnow_iso)
+
+
+class OfferVersion(BaseModel):
+    """Immutable internal compensation package snapshot. A version is not an offer delivery."""
+    model_config = ConfigDict(extra="ignore")
+    offer_version_id: str = Field(default_factory=new_offer_version_id)
+    organization_id: str
+    offer_id: str
+    version_number: int = Field(ge=1)
+    base_salary: int = Field(ge=0)
+    bonus: int = Field(default=0, ge=0)
+    equity_units: int = Field(default=0, ge=0)
+    signing_bonus: int = Field(default=0, ge=0)
+    currency: str
+    terms: dict[str, Any] = Field(default_factory=dict)
+    created_by_user_id: str
+    created_at: str = Field(default_factory=utcnow_iso)
+
+
+class OfferExtensionRequest(BaseModel):
+    """Separately approved request to mark an internal package as extended; no provider delivery occurs."""
+    model_config = ConfigDict(extra="ignore")
+    offer_extension_request_id: str = Field(default_factory=new_offer_extension_request_id)
+    organization_id: str
+    offer_id: str
+    candidate_id: str
+    offer_version_id: str
+    requested_by_user_id: str
+    rationale: str
+    approval_id: Optional[str] = None
+    status: str = "awaiting_approval"
+    resolved_by_user_id: Optional[str] = None
+    resolved_at: Optional[str] = None
+    created_at: str = Field(default_factory=utcnow_iso)
+
+
+class OfferCandidateResponse(BaseModel):
+    """Staff-recorded candidate offer response. It never changes the application’s final hiring status."""
+    model_config = ConfigDict(extra="ignore")
+    offer_candidate_response_id: str = Field(default_factory=new_offer_candidate_response_id)
+    organization_id: str
+    offer_id: str
+    candidate_id: str
+    response: str  # accepted | declined | requested_changes
+    note: Optional[str] = None
+    recorded_by_user_id: str
     created_at: str = Field(default_factory=utcnow_iso)
 
 
@@ -1786,6 +1838,52 @@ class WorldState:
             {"organization_id": organization_id}, {"_id": 0}
         ).to_list(500)
         return [Offer(**d) for d in docs]
+
+    async def create_offer_version(self, version: OfferVersion) -> OfferVersion:
+        await self.db.offer_versions.insert_one(version.model_dump())
+        return version
+
+    async def list_offer_versions(self, organization_id: str, offer_id: str) -> list[OfferVersion]:
+        docs = await self.db.offer_versions.find(
+            {"organization_id": organization_id, "offer_id": offer_id}, {"_id": 0}
+        ).sort("version_number", -1).to_list(100)
+        return [OfferVersion(**doc) for doc in docs]
+
+    async def get_offer_version(self, organization_id: str, offer_version_id: str) -> Optional[OfferVersion]:
+        doc = await self.db.offer_versions.find_one(
+            {"organization_id": organization_id, "offer_version_id": offer_version_id}, {"_id": 0}
+        )
+        return OfferVersion(**doc) if doc else None
+
+    async def create_offer_extension_request(self, request: OfferExtensionRequest) -> OfferExtensionRequest:
+        await self.db.offer_extension_requests.insert_one(request.model_dump())
+        return request
+
+    async def get_offer_extension_request(self, organization_id: str, request_id: str) -> Optional[OfferExtensionRequest]:
+        doc = await self.db.offer_extension_requests.find_one(
+            {"organization_id": organization_id, "offer_extension_request_id": request_id}, {"_id": 0}
+        )
+        return OfferExtensionRequest(**doc) if doc else None
+
+    async def resolve_offer_extension_request(
+        self, organization_id: str, request_id: str, *, status: str, resolved_by_user_id: str
+    ) -> Optional[OfferExtensionRequest]:
+        now = utcnow_iso()
+        await self.db.offer_extension_requests.update_one(
+            {"organization_id": organization_id, "offer_extension_request_id": request_id, "status": "awaiting_approval"},
+            {"$set": {"status": status, "resolved_by_user_id": resolved_by_user_id, "resolved_at": now}},
+        )
+        return await self.get_offer_extension_request(organization_id, request_id)
+
+    async def record_offer_candidate_response(self, response: OfferCandidateResponse) -> OfferCandidateResponse:
+        await self.db.offer_candidate_responses.insert_one(response.model_dump())
+        return response
+
+    async def list_offer_candidate_responses(self, organization_id: str, offer_id: str) -> list[OfferCandidateResponse]:
+        docs = await self.db.offer_candidate_responses.find(
+            {"organization_id": organization_id, "offer_id": offer_id}, {"_id": 0}
+        ).sort("created_at", -1).to_list(100)
+        return [OfferCandidateResponse(**doc) for doc in docs]
 
     async def upsert_communication_template(self, template: CandidateCommunicationTemplate) -> CandidateCommunicationTemplate:
         template.updated_at = utcnow_iso()

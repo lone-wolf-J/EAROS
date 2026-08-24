@@ -40,6 +40,7 @@ from applications.auth import AppUser, build_router as build_auth_router, get_cu
 from foundation import (
     AuditExportStatus,
     ApplicationStatus,
+    OfferStatus,
     DataSubjectRequestStatus,
     DomainEvent,
     EventType,
@@ -113,6 +114,9 @@ from platform_core.world import (
     InterviewFeedback,
     NotificationPreference,
     Offer,
+    OfferCandidateResponse,
+    OfferExtensionRequest,
+    OfferVersion,
     RecruiterAlert,
     OnboardingHandoff,
     Pipeline,
@@ -1401,6 +1405,25 @@ class OfferDraftCreateRequest(BaseModel):
     equity_units: int = Field(default=0, ge=0, le=10_000_000)
     signing_bonus: int = Field(default=0, ge=0, le=10_000_000)
     currency: str = Field(min_length=3, max_length=3, pattern="^[A-Z]{3}$")
+    terms: dict[str, Any] = Field(default_factory=dict)
+
+
+class OfferVersionCreateRequest(BaseModel):
+    base_salary: int = Field(ge=0, le=10_000_000)
+    bonus: int = Field(default=0, ge=0, le=10_000_000)
+    equity_units: int = Field(default=0, ge=0, le=10_000_000)
+    signing_bonus: int = Field(default=0, ge=0, le=10_000_000)
+    currency: str = Field(min_length=3, max_length=3, pattern="^[A-Z]{3}$")
+    terms: dict[str, Any] = Field(default_factory=dict)
+
+
+class OfferExtensionRequestCreateRequest(BaseModel):
+    rationale: str = Field(min_length=10, max_length=10_000)
+
+
+class OfferCandidateResponseCreateRequest(BaseModel):
+    response: str = Field(pattern="^(accepted|declined|requested_changes)$")
+    note: Optional[str] = Field(default=None, max_length=10_000)
 
 
 @app.get("/api/ats/offers")
@@ -1413,7 +1436,18 @@ async def create_ats_offer_draft(req: OfferDraftCreateRequest, user: AppUser = D
     _require_role(user, Role.ADMIN, Role.RECRUITER)
     await _scoped_candidate(req.candidate_id, user)
     await _scoped_job(req.job_id, user)
-    offer = await world.upsert_offer(Offer(organization_id=user.organization_id, **req.model_dump()))
+    offer = await world.upsert_offer(Offer(
+        organization_id=user.organization_id, candidate_id=req.candidate_id, job_id=req.job_id,
+        base_salary=req.base_salary, bonus=req.bonus, equity_units=req.equity_units,
+        signing_bonus=req.signing_bonus, currency=req.currency,
+    ))
+    version = await world.create_offer_version(OfferVersion(
+        organization_id=user.organization_id, offer_id=offer.offer_id, version_number=1,
+        base_salary=req.base_salary, bonus=req.bonus, equity_units=req.equity_units,
+        signing_bonus=req.signing_bonus, currency=req.currency, terms=req.terms, created_by_user_id=user.user_id,
+    ))
+    offer.current_version_id = version.offer_version_id
+    offer = await world.upsert_offer(offer)
     await governance.emit(DomainEvent(
         event_type=EventType.OFFER_DRAFT_CREATED,
         actor=f"user:{user.user_id}",
@@ -1431,6 +1465,116 @@ async def create_ats_offer_draft(req: OfferDraftCreateRequest, user: AppUser = D
         payload={"offer_id": offer.offer_id, "job_id": offer.job_id, "status": offer.status.value},
     ))
     return offer.model_dump()
+
+
+@app.get("/api/ats/offers/{offer_id}/versions")
+async def list_ats_offer_versions(offer_id: str, user: AppUser = Depends(_current_user)):
+    if not await world.get_offer(user.organization_id, offer_id):
+        raise HTTPException(status_code=404, detail="Offer not found")
+    return [version.model_dump() for version in await world.list_offer_versions(user.organization_id, offer_id)]
+
+
+@app.post("/api/ats/offers/{offer_id}/versions", status_code=201)
+async def create_ats_offer_version(offer_id: str, req: OfferVersionCreateRequest, user: AppUser = Depends(_current_user)):
+    _require_role(user, Role.ADMIN, Role.RECRUITER)
+    offer = await world.get_offer(user.organization_id, offer_id)
+    if not offer:
+        raise HTTPException(status_code=404, detail="Offer not found")
+    if getattr(offer.status, "value", offer.status) != OfferStatus.DRAFT.value:
+        raise HTTPException(status_code=409, detail="New offer versions may be created only while the package is an internal draft")
+    existing = await world.list_offer_versions(user.organization_id, offer.offer_id)
+    version = await world.create_offer_version(OfferVersion(
+        organization_id=user.organization_id, offer_id=offer.offer_id,
+        version_number=max((item.version_number for item in existing), default=0) + 1,
+        **req.model_dump(), created_by_user_id=user.user_id,
+    ))
+    offer.current_version_id = version.offer_version_id
+    await world.upsert_offer(offer)
+    await governance.emit(DomainEvent(
+        event_type=EventType.OFFER_VERSION_CREATED, actor=f"user:{user.user_id}", subject_type="offer",
+        subject_id=offer.offer_id, organization_id=user.organization_id,
+        payload={"offer_version_id": version.offer_version_id, "version_number": version.version_number},
+        correlation_id=version.offer_version_id,
+    ))
+    await world.record_activity(ActivityRecord(
+        organization_id=user.organization_id, entity_type="candidate", entity_id=offer.candidate_id,
+        event_type="offer.version_created", actor_user_id=user.user_id,
+        payload={"offer_id": offer.offer_id, "offer_version_id": version.offer_version_id, "version_number": version.version_number},
+        correlation_id=version.offer_version_id,
+    ))
+    return version.model_dump()
+
+
+@app.post("/api/ats/offers/{offer_id}/extension-requests", status_code=201)
+async def create_ats_offer_extension_request(offer_id: str, req: OfferExtensionRequestCreateRequest, user: AppUser = Depends(_current_user)):
+    _require_role(user, Role.ADMIN, Role.RECRUITER)
+    offer = await world.get_offer(user.organization_id, offer_id)
+    if not offer:
+        raise HTTPException(status_code=404, detail="Offer not found")
+    if getattr(offer.status, "value", offer.status) != OfferStatus.DRAFT.value or not offer.current_version_id:
+        raise HTTPException(status_code=409, detail="Only a current internal draft version can be queued for offer-extension approval")
+    request = OfferExtensionRequest(
+        organization_id=user.organization_id, offer_id=offer.offer_id, candidate_id=offer.candidate_id,
+        offer_version_id=offer.current_version_id, requested_by_user_id=user.user_id, rationale=req.rationale,
+    )
+    approval = Approval(
+        organization_id=user.organization_id, subject_type="offer_extension_request", subject_id=request.offer_extension_request_id,
+        requested_by=user.user_id, reason="Approve recording an internal offer package as extended; provider delivery remains unconfigured.",
+        context={"offer_extension_request_id": request.offer_extension_request_id, "offer_id": offer.offer_id, "offer_version_id": offer.current_version_id, "candidate_id": offer.candidate_id, "correlation_id": request.offer_extension_request_id},
+    )
+    request.approval_id = approval.approval_id
+    await world.create_offer_extension_request(request)
+    await governance.request_approval(approval)
+    await governance.emit(DomainEvent(
+        event_type=EventType.OFFER_EXTENSION_REQUESTED, actor=f"user:{user.user_id}", subject_type="offer_extension_request",
+        subject_id=request.offer_extension_request_id, organization_id=user.organization_id,
+        payload={"approval_id": approval.approval_id, "offer_id": offer.offer_id, "offer_version_id": offer.current_version_id},
+        correlation_id=request.offer_extension_request_id,
+    ))
+    await world.record_activity(ActivityRecord(
+        organization_id=user.organization_id, entity_type="candidate", entity_id=offer.candidate_id,
+        event_type="offer.extension_requested", actor_user_id=user.user_id,
+        payload={"offer_id": offer.offer_id, "offer_extension_request_id": request.offer_extension_request_id, "approval_id": approval.approval_id},
+        correlation_id=request.offer_extension_request_id,
+    ))
+    response = request.model_dump(); response["approval"] = approval.model_dump(); return response
+
+
+@app.get("/api/ats/offers/{offer_id}/candidate-responses")
+async def list_ats_offer_candidate_responses(offer_id: str, user: AppUser = Depends(_current_user)):
+    if not await world.get_offer(user.organization_id, offer_id):
+        raise HTTPException(status_code=404, detail="Offer not found")
+    return [response.model_dump() for response in await world.list_offer_candidate_responses(user.organization_id, offer_id)]
+
+
+@app.post("/api/ats/offers/{offer_id}/candidate-responses", status_code=201)
+async def record_ats_offer_candidate_response(offer_id: str, req: OfferCandidateResponseCreateRequest, user: AppUser = Depends(_current_user)):
+    _require_role(user, Role.ADMIN, Role.RECRUITER)
+    offer = await world.get_offer(user.organization_id, offer_id)
+    if not offer:
+        raise HTTPException(status_code=404, detail="Offer not found")
+    if getattr(offer.status, "value", offer.status) != OfferStatus.EXTENDED.value:
+        raise HTTPException(status_code=409, detail="Candidate responses can be recorded only after independently approved offer extension")
+    response = await world.record_offer_candidate_response(OfferCandidateResponse(
+        organization_id=user.organization_id, offer_id=offer.offer_id, candidate_id=offer.candidate_id,
+        response=req.response, note=req.note, recorded_by_user_id=user.user_id,
+    ))
+    if req.response in {"accepted", "declined"}:
+        offer.status = OfferStatus.ACCEPTED if req.response == "accepted" else OfferStatus.DECLINED
+        await world.upsert_offer(offer)
+    await governance.emit(DomainEvent(
+        event_type=EventType.OFFER_CANDIDATE_RESPONSE_RECORDED, actor=f"user:{user.user_id}", subject_type="offer",
+        subject_id=offer.offer_id, organization_id=user.organization_id,
+        payload={"offer_candidate_response_id": response.offer_candidate_response_id, "response": req.response, "offer_status": getattr(offer.status, "value", offer.status)},
+        correlation_id=response.offer_candidate_response_id,
+    ))
+    await world.record_activity(ActivityRecord(
+        organization_id=user.organization_id, entity_type="candidate", entity_id=offer.candidate_id,
+        event_type="offer.candidate_response_recorded", actor_user_id=user.user_id,
+        payload={"offer_id": offer.offer_id, "offer_candidate_response_id": response.offer_candidate_response_id, "response": req.response},
+        correlation_id=response.offer_candidate_response_id,
+    ))
+    return response.model_dump()
 
 
 def _career_site_requisition_is_open(requisition: Requisition) -> bool:
@@ -2917,10 +3061,10 @@ async def decide_approval(
     if getattr(approval, "status", None) != "pending":
         raise HTTPException(status_code=409, detail="This approval has already been decided")
     if (
-        getattr(approval, "subject_type", None) in {"hiring_decision", "application_reactivation_request"}
+        getattr(approval, "subject_type", None) in {"hiring_decision", "application_reactivation_request", "offer_extension_request"}
         and getattr(approval, "requested_by", None) == user.user_id
     ):
-        raise HTTPException(status_code=403, detail="A requester cannot approve or deny their own governed application outcome")
+        raise HTTPException(status_code=403, detail="A requester cannot approve or deny their own governed outcome")
     if getattr(approval, "subject_type", None) == "hiring_decision" and req.decision == "granted":
         decision = await world.get_hiring_decision(user.organization_id, approval.subject_id)
         if not decision or decision.approval_id != approval.approval_id:
@@ -2942,6 +3086,16 @@ async def decide_approval(
         await _validate_application_reactivation_target(
             application, reactivation.target_stage_id, reactivation.target_stage_name
         )
+    if getattr(approval, "subject_type", None) == "offer_extension_request" and req.decision == "granted":
+        extension = await world.get_offer_extension_request(user.organization_id, approval.subject_id)
+        if not extension or extension.approval_id != approval.approval_id:
+            raise HTTPException(status_code=404, detail="Offer extension request not found")
+        offer = await world.get_offer(user.organization_id, extension.offer_id)
+        version = await world.get_offer_version(user.organization_id, extension.offer_version_id)
+        if not offer or not version or version.offer_id != offer.offer_id:
+            raise HTTPException(status_code=409, detail="The offer package no longer has the requested version")
+        if getattr(offer.status, "value", offer.status) != OfferStatus.DRAFT.value or offer.current_version_id != version.offer_version_id:
+            raise HTTPException(status_code=409, detail="The offer package changed during approval and cannot be marked extended")
     if approval.context.get("capability_id") in RETENTION_EXECUTION_CAPABILITIES:
         _require_role(user, Role.ADMIN)
     a = await governance.decide_approval(approval_id, req.decision, user.user_id, req.note)
@@ -3075,6 +3229,46 @@ async def decide_approval(
             correlation_id=resolved.application_reactivation_request_id,
         ))
         response["application_reactivation_request"] = resolved.model_dump()
+    if getattr(a, "subject_type", None) == "offer_extension_request":
+        extension = await world.get_offer_extension_request(user.organization_id, a.subject_id)
+        if not extension or extension.approval_id != a.approval_id:
+            raise HTTPException(404, "offer extension request not found")
+        offer = await world.get_offer(user.organization_id, extension.offer_id)
+        if not offer:
+            raise HTTPException(404, "offer not found")
+        if a.status == "granted":
+            offer.status = OfferStatus.EXTENDED
+            offer.extension_approval_id = a.approval_id
+            offer = await world.upsert_offer(offer)
+        resolution_status = "effective" if a.status == "granted" else "denied"
+        resolved = await world.resolve_offer_extension_request(
+            user.organization_id, extension.offer_extension_request_id,
+            status=resolution_status, resolved_by_user_id=user.user_id,
+        )
+        if not resolved:
+            raise HTTPException(404, "offer extension request not found")
+        await governance.emit(DomainEvent(
+            event_type=EventType.OFFER_EXTENSION_EFFECTIVE if a.status == "granted" else EventType.OFFER_EXTENSION_DENIED,
+            actor=f"user:{user.user_id}", subject_type="offer_extension_request",
+            subject_id=resolved.offer_extension_request_id, organization_id=user.organization_id,
+            payload={"approval_id": a.approval_id, "offer_id": resolved.offer_id, "offer_version_id": resolved.offer_version_id, "offer_status": getattr(offer.status, "value", offer.status)},
+            correlation_id=resolved.offer_extension_request_id,
+        ))
+        await world.record_activity(ActivityRecord(
+            organization_id=user.organization_id, entity_type="candidate", entity_id=resolved.candidate_id,
+            event_type="offer.extension_effective" if a.status == "granted" else "offer.extension_denied",
+            actor_user_id=user.user_id,
+            payload={"offer_extension_request_id": resolved.offer_extension_request_id, "approval_id": a.approval_id, "offer_id": resolved.offer_id, "offer_version_id": resolved.offer_version_id},
+            correlation_id=resolved.offer_extension_request_id,
+        ))
+        if a.status == "granted":
+            await _record_lifecycle_candidate_notification(
+                organization_id=user.organization_id, candidate_id=resolved.candidate_id,
+                notification_type="offer_extension_recorded", subject="Offer extension recorded",
+                body="An offer extension was recorded. Delivery is pending explicit provider configuration.",
+                actor_user_id=user.user_id,
+            )
+        response["offer_extension_request"] = resolved.model_dump()
     return response
 
 

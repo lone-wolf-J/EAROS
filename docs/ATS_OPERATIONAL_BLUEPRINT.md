@@ -31,6 +31,8 @@ The recruiter workbench will provide separate but connected views: **My work**, 
 
 > **Interview debrief rule.** A recruiter, administrator, or hiring manager may record a panel debrief only against tenant-scoped interviews and submitted feedback belonging to one application. The immutable synthesis captures its evidence set, participant references, facilitator, recommendation, and unresolved questions, but it cannot move a stage or change a final outcome. Hiring or rejection remains a separate independently approved decision.
 
+> **Offer package rule.** EAROS records each compensation package as an immutable internal version. Only a current draft can enter an independent extension-approval request; a grant changes the offer record to extended but does not send email, invoke e-signature, or finalise the hiring outcome. Candidate responses are staff-recorded against an extended offer and may update offer status, while the application still requires a separate independently approved hire decision.
+
 ## Interview and decision operations
 
 Interview plans associate stages with an interview type, duration, timezone, interviewer roles, interview kit, focus competencies, and scorecard. Recruiters can coordinate records and reminders, while a calendar/video provider remains configured-but-inactive until supplied. Feedback is independently authored, has completion visibility, and drives a debrief packet. Offer packages remain internal drafts with version history, approval route, compensation components, and candidate-response record; an accepted handoff is limited to downstream routing metadata.

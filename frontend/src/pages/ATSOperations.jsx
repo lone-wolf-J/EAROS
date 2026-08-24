@@ -166,6 +166,7 @@ export default function ATSOperations() {
   const [selectedActivityCandidateId, setSelectedActivityCandidateId] = useState("");
   const [selectedDistributionRequisitionId, setSelectedDistributionRequisitionId] = useState("");
   const [selectedRequisitionId, setSelectedRequisitionId] = useState("");
+  const [selectedOfferId, setSelectedOfferId] = useState("");
   const [stageDrafts, setStageDrafts] = useState({});
   const [applicationQuery, setApplicationQuery] = useState("");
   const [applicationRequisitionFilter, setApplicationRequisitionFilter] = useState("");
@@ -200,6 +201,10 @@ export default function ATSOperations() {
   const { data: hiringDecisions = [], mutate: mutateHiringDecisions } = useSWR("/ats/hiring-decisions", fetcher);
   const { data: dispositionReasons = [] } = useSWR("/ats/disposition-reasons", fetcher);
   const { data: offers = [], mutate: mutateOffers } = useSWR("/ats/offers", fetcher);
+  const offerVersionsPath = selectedOfferId ? `/ats/offers/${selectedOfferId}/versions` : null;
+  const offerResponsesPath = selectedOfferId ? `/ats/offers/${selectedOfferId}/candidate-responses` : null;
+  const { data: offerVersions = [], mutate: mutateOfferVersions } = useSWR(offerVersionsPath, fetcher);
+  const { data: offerCandidateResponses = [], mutate: mutateOfferCandidateResponses } = useSWR(offerResponsesPath, fetcher);
   const { data: handoffs = [], mutate: mutateHandoffs } = useSWR("/ats/onboarding-handoffs", fetcher);
 
   const candidateById = useMemo(() => new Map(candidates.map((candidate) => [candidate.candidate_id, candidate])), [candidates]);
@@ -393,6 +398,42 @@ export default function ATSOperations() {
     } finally { setSaving(false); }
   };
 
+  const createOfferVersion = async ({ offer_id, ...body }) => {
+    setError(""); setSaving(true);
+    try {
+      await api.post(`/ats/offers/${offer_id}/versions`, body);
+      await Promise.all([mutateOfferVersions(), mutateOffers()]);
+      setModal(null);
+    } catch (requestError) {
+      const detail = requestError?.response?.data?.detail;
+      setError(typeof detail === "string" ? detail : "EAROS could not add this internal offer package version.");
+    } finally { setSaving(false); }
+  };
+
+  const requestOfferExtension = async ({ offer_id, ...body }) => {
+    setError(""); setSaving(true);
+    try {
+      await api.post(`/ats/offers/${offer_id}/extension-requests`, body);
+      await mutateOffers();
+      setModal(null);
+    } catch (requestError) {
+      const detail = requestError?.response?.data?.detail;
+      setError(typeof detail === "string" ? detail : "EAROS could not queue this offer extension for independent approval.");
+    } finally { setSaving(false); }
+  };
+
+  const recordOfferCandidateResponse = async ({ offer_id, ...body }) => {
+    setError(""); setSaving(true);
+    try {
+      await api.post(`/ats/offers/${offer_id}/candidate-responses`, body);
+      await Promise.all([mutateOfferCandidateResponses(), mutateOffers()]);
+      setModal(null);
+    } catch (requestError) {
+      const detail = requestError?.response?.data?.detail;
+      setError(typeof detail === "string" ? detail : "EAROS could not record this offer response.");
+    } finally { setSaving(false); }
+  };
+
   const recordReferral = async (requisitionId, body) => {
     setError(""); setSaving(true);
     try {
@@ -494,7 +535,7 @@ export default function ATSOperations() {
 
               {tab === "distribution" && <div className="space-y-4"><JobDistributionWorkspace requisitions={requisitions} adapters={distributionAdapters} selectedRequisitionId={selectedDistributionRequisitionId} setSelectedRequisitionId={setSelectedDistributionRequisitionId} saving={saving} onUpdatePublication={updatePublication} onRecordReferral={() => selectedDistributionRequisitionId && setModal("referral")} /><CareerIntakeManager requisitions={requisitions} selectedRequisitionId={selectedDistributionRequisitionId} onRecordReferral={() => selectedDistributionRequisitionId && setModal("referral")} /></div>}
 
-              {tab === "offers" && <OfferWorkspace offers={offers} applications={applications} candidates={candidateById} onDraft={() => setModal("offer")} />}
+              {tab === "offers" && <OfferWorkspace offers={offers} applications={applications} candidates={candidateById} selectedOfferId={selectedOfferId} setSelectedOfferId={setSelectedOfferId} versions={offerVersions} responses={offerCandidateResponses} onDraft={() => setModal("offer")} onVersion={() => selectedOfferId && setModal("offer-version")} onExtension={() => selectedOfferId && setModal("offer-extension")} onResponse={() => selectedOfferId && setModal("offer-response")} />}
 
               {tab === "handoffs" && (handoffs.length ? (
                 <div className="divide-y divide-slate-800 overflow-hidden rounded-sm border border-slate-800">{handoffs.map((handoff) => <div key={handoff.onboarding_handoff_id} className="grid gap-3 bg-slate-950/40 px-4 py-4 transition hover:bg-slate-800/30 md:grid-cols-[1.6fr_1fr_auto] md:items-center"><div><div className="font-semibold text-slate-100">{candidateById.get(handoff.candidate_id)?.full_name || handoff.candidate_id}</div><div className="mt-1 font-mono2 text-[10px] text-slate-500">OFFER · {handoff.offer_id} · {handoff.destination_system || "Destination pending"}</div></div><div className="text-xs text-slate-400">START · {handoff.target_start_date || "Not scheduled"}<div className="mt-1 font-mono2 text-[10px] text-slate-600">{handoff.checklist?.length || 0} routing items</div></div><Status value={handoff.status} /></div>)}</div>
@@ -519,6 +560,9 @@ export default function ATSOperations() {
         {modal === "hiring-decision" && <HiringDecisionForm applications={applications} candidates={candidateById} dispositionReasons={dispositionReasons} saving={saving} onClose={() => setModal(null)} onSubmit={(body) => create("/ats/hiring-decisions", body, mutateHiringDecisions)} />}
         {modal === "reactivation" && <ApplicationReactivationForm applications={applications} candidates={candidateById} pipelines={pipelines} saving={saving} onClose={() => setModal(null)} onSubmit={requestApplicationReactivation} />}
         {modal === "offer" && <OfferDraftForm applications={applications} candidates={candidateById} saving={saving} onClose={() => setModal(null)} onSubmit={(body) => create("/ats/offers", body, mutateOffers)} />}
+        {modal === "offer-version" && <OfferVersionForm offer={offers.find((item) => item.offer_id === selectedOfferId)} saving={saving} onClose={() => setModal(null)} onSubmit={createOfferVersion} />}
+        {modal === "offer-extension" && <OfferExtensionRequestForm offer={offers.find((item) => item.offer_id === selectedOfferId)} saving={saving} onClose={() => setModal(null)} onSubmit={requestOfferExtension} />}
+        {modal === "offer-response" && <OfferCandidateResponseForm offer={offers.find((item) => item.offer_id === selectedOfferId)} saving={saving} onClose={() => setModal(null)} onSubmit={recordOfferCandidateResponse} />}
         {modal === "handoff" && <HandoffForm offers={offers} candidates={candidateById} saving={saving} onClose={() => setModal(null)} onSubmit={(body) => create("/ats/onboarding-handoffs", body, mutateHandoffs)} />}
       </div>
     </AppLayout>
@@ -581,9 +625,10 @@ function HiringDecisionWorkspace({ applications, candidates, decisions, onReques
   return <section className="rounded-sm border border-amber-500/25 bg-amber-500/5 p-4" data-testid="hiring-decision-workspace"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="font-mono2 text-[10px] tracking-widest text-amber-300">GOVERNED HIRING DECISIONS</div><p className="mt-1 max-w-3xl text-xs leading-5 text-slate-400">Recruiters may request a final hire or reject outcome only after evidence review. EAROS creates a tenant-scoped approval request; an independent approver must decide it in Governance before the application state can change.</p></div><button type="button" disabled={!activeApplications.length} onClick={onRequest} className="rounded-sm border border-amber-400/40 bg-amber-400/10 px-2.5 py-1.5 text-xs font-bold text-amber-100 transition hover:bg-amber-400/20 disabled:cursor-not-allowed disabled:opacity-40">Request decision review</button></div><div className="mt-4 space-y-2">{decisions.length ? decisions.map((decision) => <div key={decision.hiring_decision_id} className="grid gap-2 rounded-sm border border-slate-800 bg-slate-950/50 p-3 md:grid-cols-[1fr_auto]"><div><div className="font-semibold capitalize text-slate-100">{decision.outcome} · {candidates.get(decision.candidate_id)?.full_name || decision.candidate_id}</div><div className="mt-1 font-mono2 text-[10px] text-slate-500">APPLICATION · {decision.application_id} · REQUESTED {formatDate(decision.created_at)}</div><p className="mt-2 text-xs leading-5 text-slate-400">{decision.rationale}</p></div><div className="flex items-start justify-between gap-2 md:flex-col md:items-end"><Status value={decision.status} /><span className="font-mono2 text-[9px] text-slate-600">APPROVAL · {decision.approval_id || "PENDING"}</span></div></div>) : <div className="rounded-sm border border-dashed border-amber-500/25 px-4 py-6 text-center text-xs text-slate-500">No final outcome has been requested. Scorecard evidence remains independent until a human requests and approves a decision.</div>}</div></section>;
 }
 
-function OfferWorkspace({ offers, applications, candidates, onDraft }) {
+function OfferWorkspace({ offers, applications, candidates, selectedOfferId, setSelectedOfferId, versions, responses, onDraft, onVersion, onExtension, onResponse }) {
   const activeApplications = applications.filter((application) => application.status === "active" && application.job_id);
   return <section className="space-y-4" data-testid="offer-workspace">
+    <OfferLifecyclePanel offers={offers} candidates={candidates} selectedOfferId={selectedOfferId} setSelectedOfferId={setSelectedOfferId} versions={versions} responses={responses} onVersion={onVersion} onExtension={onExtension} onResponse={onResponse} />
     <div className="rounded-sm border border-teal-400/25 bg-teal-400/5 p-4">
       <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="font-mono2 text-[10px] tracking-widest text-teal-200">GOVERNED OFFER DRAFTS</div><p className="mt-1 max-w-3xl text-xs leading-5 text-slate-400">Prepare an internal compensation record for an active application. Creating a draft does not send, extend, accept, or approve an offer. A final hire outcome remains in the independent decision-review flow.</p></div><button type="button" disabled={!activeApplications.length} onClick={onDraft} className="rounded-sm border border-teal-400/35 bg-teal-400/10 px-2.5 py-1.5 text-xs font-bold text-teal-100 transition hover:bg-teal-400/20 disabled:cursor-not-allowed disabled:opacity-40">Draft offer</button></div>
       <div className="mt-4 rounded-sm border border-teal-400/20 bg-slate-950/45 px-3 py-2.5 text-xs leading-5 text-teal-50/75">No candidate communication, e-signature, payroll routing, or final status mutation occurs here. EAROS records a tenant-scoped internal draft and its audit event only.</div>
@@ -602,6 +647,27 @@ function OfferDraftForm({ applications, candidates, saving, onClose, onSubmit })
   const [currency, setCurrency] = useState("USD");
   const application = eligible.find((item) => item.application_id === applicationId);
   return <Modal title="Draft internal offer" onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); if (application) onSubmit({ candidate_id: application.candidate_id, job_id: application.job_id, base_salary: Number(baseSalary), bonus: Number(bonus || 0), equity_units: Number(equityUnits || 0), signing_bonus: Number(signingBonus || 0), currency: currency.toUpperCase() }); }} className="space-y-4 p-5"><p className="rounded-sm border border-teal-400/20 bg-teal-400/5 px-3 py-2.5 text-xs leading-5 text-teal-50/75">This records an internal draft only. It does not send an offer, contact a candidate, modify a final application status, or replace independent decision approval.</p><Field label="ACTIVE APPLICATION"><select required value={applicationId} onChange={(event) => setApplicationId(event.target.value)} className={inputClass}><option value="">Select an active application</option>{eligible.map((item) => <option key={item.application_id} value={item.application_id}>{candidates.get(item.candidate_id)?.full_name || item.candidate_id} · {item.current_stage_name}</option>)}</select></Field><div className="grid gap-3 sm:grid-cols-2"><Field label="BASE SALARY"><input className={inputClass} required min="0" type="number" value={baseSalary} onChange={(event) => setBaseSalary(event.target.value)} /></Field><Field label="CURRENCY"><input className={inputClass} required maxLength="3" pattern="[A-Za-z]{3}" value={currency} onChange={(event) => setCurrency(event.target.value.toUpperCase())} /></Field><Field label="BONUS"><input className={inputClass} min="0" type="number" value={bonus} onChange={(event) => setBonus(event.target.value)} /></Field><Field label="SIGNING BONUS"><input className={inputClass} min="0" type="number" value={signingBonus} onChange={(event) => setSigningBonus(event.target.value)} /></Field><Field label="EQUITY UNITS"><input className={inputClass} min="0" type="number" value={equityUnits} onChange={(event) => setEquityUnits(event.target.value)} /></Field></div><div className="flex justify-end gap-2 border-t border-slate-800 pt-4"><button type="button" onClick={onClose} className="rounded-sm px-3 py-2 text-xs font-semibold text-slate-400 hover:bg-slate-800">Cancel</button><button disabled={saving || !application || !baseSalary} className="rounded-sm bg-gradient-to-r from-violet-600 to-teal-500 px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">{saving ? "Saving…" : "Record offer draft"}</button></div></form></Modal>;
+}
+
+function OfferLifecyclePanel({ offers, candidates, selectedOfferId, setSelectedOfferId, versions, responses, onVersion, onExtension, onResponse }) {
+  const offer = offers.find((item) => item.offer_id === selectedOfferId);
+  return <section className="rounded-sm border border-amber-400/25 bg-amber-400/5 p-4" data-testid="offer-lifecycle-panel"><div className="flex flex-wrap items-end justify-between gap-3"><div><div className="font-mono2 text-[10px] tracking-widest text-amber-200">VERSIONED OFFER CONTROL</div><p className="mt-1 text-xs leading-5 text-slate-400">Package revisions are immutable records. Extending a package requires independent Governance approval and records no email, e-signature, or other provider delivery.</p></div><select aria-label="Select offer lifecycle record" value={selectedOfferId} onChange={(event) => setSelectedOfferId(event.target.value)} className={`${inputClass} min-w-64`}><option value="">Select offer</option>{offers.map((item) => <option key={item.offer_id} value={item.offer_id}>{candidates.get(item.candidate_id)?.full_name || item.candidate_id} · {item.status}</option>)}</select></div>{offer && <div className="mt-4 space-y-3"><div className="flex flex-wrap gap-2"><button type="button" disabled={offer.status !== "draft"} onClick={onVersion} className="rounded-sm border border-indigo-400/40 bg-indigo-400/10 px-2.5 py-1.5 text-xs font-bold text-indigo-100 disabled:cursor-not-allowed disabled:opacity-40">New package version</button><button type="button" disabled={offer.status !== "draft"} onClick={onExtension} className="rounded-sm border border-amber-400/40 bg-amber-400/10 px-2.5 py-1.5 text-xs font-bold text-amber-100 disabled:cursor-not-allowed disabled:opacity-40">Request extension approval</button><button type="button" disabled={offer.status !== "extended"} onClick={onResponse} className="rounded-sm border border-teal-400/40 bg-teal-400/10 px-2.5 py-1.5 text-xs font-bold text-teal-100 disabled:cursor-not-allowed disabled:opacity-40">Record candidate response</button><Status value={offer.status} /></div><div className="grid gap-2 md:grid-cols-2"><div className="rounded-sm border border-slate-800 bg-slate-950/45 p-3"><div className="font-mono2 text-[9px] tracking-wider text-slate-600">PACKAGE VERSIONS</div>{versions.length ? <div className="mt-2 space-y-1.5">{versions.map((version) => <div key={version.offer_version_id} className="text-xs text-slate-300">v{version.version_number} · {version.currency} {Number(version.base_salary || 0).toLocaleString()} <span className="text-slate-600">{formatDate(version.created_at)}</span></div>)}</div> : <div className="mt-2 text-xs text-slate-600">Select an offer to load package snapshots.</div>}</div><div className="rounded-sm border border-slate-800 bg-slate-950/45 p-3"><div className="font-mono2 text-[9px] tracking-wider text-slate-600">RECORDED CANDIDATE RESPONSES</div>{responses.length ? <div className="mt-2 space-y-1.5">{responses.map((response) => <div key={response.offer_candidate_response_id} className="text-xs text-slate-300">{String(response.response).replaceAll("_", " ")} <span className="text-slate-600">{formatDate(response.created_at)}</span></div>)}</div> : <div className="mt-2 text-xs text-slate-600">No response record is available for this offer.</div>}</div></div></div>}</section>;
+}
+
+function OfferVersionForm({ offer, saving, onClose, onSubmit }) {
+  const [baseSalary, setBaseSalary] = useState(String(offer?.base_salary || "")); const [bonus, setBonus] = useState(String(offer?.bonus || 0)); const [equityUnits, setEquityUnits] = useState(String(offer?.equity_units || 0)); const [signingBonus, setSigningBonus] = useState(String(offer?.signing_bonus || 0)); const [currency, setCurrency] = useState(offer?.currency || "USD"); const [terms, setTerms] = useState("");
+  if (!offer) return null;
+  return <Modal title="Add internal offer package version" onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); onSubmit({ offer_id: offer.offer_id, base_salary: Number(baseSalary), bonus: Number(bonus || 0), equity_units: Number(equityUnits || 0), signing_bonus: Number(signingBonus || 0), currency: currency.toUpperCase(), terms: terms ? { notes: terms } : {} }); }}><div className="grid gap-4 px-5 py-5"><div className="rounded-sm border border-indigo-400/25 bg-indigo-500/5 px-3 py-2 text-xs leading-5 text-indigo-100">Versions are immutable internal package snapshots. EAROS blocks a revision after an offer has been independently approved for extension.</div><div className="grid gap-3 sm:grid-cols-2"><Field label="BASE SALARY"><input required min="0" type="number" value={baseSalary} onChange={(event) => setBaseSalary(event.target.value)} className={inputClass} /></Field><Field label="CURRENCY"><input required maxLength="3" value={currency} onChange={(event) => setCurrency(event.target.value.toUpperCase())} className={inputClass} /></Field><Field label="BONUS"><input min="0" type="number" value={bonus} onChange={(event) => setBonus(event.target.value)} className={inputClass} /></Field><Field label="SIGNING BONUS"><input min="0" type="number" value={signingBonus} onChange={(event) => setSigningBonus(event.target.value)} className={inputClass} /></Field><Field label="EQUITY UNITS"><input min="0" type="number" value={equityUnits} onChange={(event) => setEquityUnits(event.target.value)} className={inputClass} /></Field></div><Field label="INTERNAL PACKAGE NOTES"><textarea value={terms} onChange={(event) => setTerms(event.target.value)} className={`${inputClass} min-h-24 resize-y`} /></Field></div><FormActions saving={saving} onClose={onClose} label="Record package version" /></form></Modal>;
+}
+
+function OfferExtensionRequestForm({ offer, saving, onClose, onSubmit }) {
+  const [rationale, setRationale] = useState(""); if (!offer) return null;
+  return <Modal title="Request offer extension approval" onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); onSubmit({ offer_id: offer.offer_id, rationale }); }}><div className="grid gap-4 px-5 py-5"><div className="rounded-sm border border-amber-400/25 bg-amber-400/5 px-3 py-2 text-xs leading-5 text-amber-100">This queues an independent approval to record the current internal package as extended. It does not send an offer or create a final hire outcome.</div><Field label="EVIDENCE-BASED RATIONALE"><textarea required minLength="10" value={rationale} onChange={(event) => setRationale(event.target.value)} className={`${inputClass} min-h-28 resize-y`} placeholder="Describe why the current reviewed package is ready for governed extension." /></Field></div><FormActions saving={saving} onClose={onClose} label="Queue extension review" /></form></Modal>;
+}
+
+function OfferCandidateResponseForm({ offer, saving, onClose, onSubmit }) {
+  const [response, setResponse] = useState("accepted"); const [note, setNote] = useState(""); if (!offer) return null;
+  return <Modal title="Record candidate offer response" onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); onSubmit({ offer_id: offer.offer_id, response, note: note || null }); }}><div className="grid gap-4 px-5 py-5"><div className="rounded-sm border border-teal-400/25 bg-teal-400/5 px-3 py-2 text-xs leading-5 text-teal-100">This is a staff-recorded response to an independently approved extension. Accepting an offer does not automatically hire the candidate; the final hiring decision remains independently governed.</div><Field label="RECORDED RESPONSE"><select value={response} onChange={(event) => setResponse(event.target.value)} className={inputClass}><option value="accepted">Accepted</option><option value="declined">Declined</option><option value="requested_changes">Requested changes</option></select></Field><Field label="RECORD NOTE"><textarea value={note} onChange={(event) => setNote(event.target.value)} className={`${inputClass} min-h-24 resize-y`} /></Field></div><FormActions saving={saving} onClose={onClose} label="Record response" /></form></Modal>;
 }
 
 function JobDistributionWorkspace({ requisitions, adapters, selectedRequisitionId, setSelectedRequisitionId, saving, onUpdatePublication, onRecordReferral }) {
