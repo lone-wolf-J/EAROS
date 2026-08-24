@@ -225,6 +225,7 @@ class EventType(str, Enum):
     APPLICATION_STAGE_CHANGED = "world.application.stage_changed"
     APPLICATION_BULK_STAGE_CHANGED = "world.application.bulk_stage_changed"
     REQUISITION_CREATED = "world.requisition.created"
+    REQUISITION_UPDATED = "world.requisition.updated"
     REQUISITION_PUBLICATION_UPDATED = "world.requisition.publication_updated"
     INTERVIEW_SCHEDULED = "world.interview.scheduled"
     SCORECARD_SUBMITTED = "world.scorecard.submitted"

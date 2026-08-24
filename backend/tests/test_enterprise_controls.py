@@ -1892,6 +1892,106 @@ def test_pipeline_time_in_stage_reporting_uses_only_tenant_applications_and_hand
     assert by_stage["Applied"]["average_time_in_stage_hours"] is None
 
 
+def test_requisition_operational_edit_validates_tenant_members_and_preserves_publication_boundary(monkeypatch):
+    calls = []
+    requisition = server.Requisition(
+        organization_id="org_alpha", requisition_id="req_alpha", title="Product Manager",
+        pipeline_id="pipe_existing", internal_publication_status="published", career_site_enabled=True,
+    )
+    members = {
+        "usr_manager": {"user_id": "usr_manager", "organization_id": "org_alpha", "role": "hiring_manager"},
+        "usr_recruiter": {"user_id": "usr_recruiter", "organization_id": "org_alpha", "role": "recruiter"},
+        "usr_wrong_role": {"user_id": "usr_wrong_role", "organization_id": "org_alpha", "role": "executive"},
+    }
+
+    class _Users:
+        async def find_one(self, query, _projection):
+            member = members.get(query["user_id"])
+            return member if member and member["organization_id"] == query["organization_id"] else None
+
+    class _World:
+        async def get_requisition(self, organization_id, requisition_id):
+            return requisition if (organization_id, requisition_id) == ("org_alpha", "req_alpha") else None
+
+        async def get_pipeline(self, organization_id, pipeline_id):
+            return SimpleNamespace(pipeline_id=pipeline_id) if (organization_id, pipeline_id) == ("org_alpha", "pipe_existing") else None
+
+        async def list_applications(self, _organization_id, requisition_id=None, **_kwargs):
+            calls.append(("applications", requisition_id))
+            return []
+
+        async def upsert_requisition(self, updated):
+            calls.append(("upsert", updated.title, updated.hiring_manager_id, updated.recruiter_ids, updated.internal_publication_status))
+            return updated
+
+        async def record_activity(self, activity):
+            calls.append(("activity", activity.event_type, tuple(activity.payload["updated_fields"])))
+            return activity
+
+    class _Governance:
+        async def emit(self, event):
+            calls.append(("event", event.event_type.value, tuple(event.payload["updated_fields"])))
+            return event
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "db", SimpleNamespace(users=_Users()))
+    monkeypatch.setattr(server, "governance", _Governance())
+    recruiter = SimpleNamespace(user_id="usr_actor", organization_id="org_alpha", role=Role.RECRUITER)
+
+    updated = asyncio.run(server.update_ats_requisition(
+        "req_alpha",
+        server.RequisitionOperationalUpdateRequest(
+            title="Senior Product Manager", hiring_manager_id="usr_manager", recruiter_ids=["usr_recruiter"],
+        ),
+        recruiter,
+    ))
+
+    assert updated["title"] == "Senior Product Manager"
+    assert updated["hiring_manager_id"] == "usr_manager"
+    assert updated["internal_publication_status"] == "published"
+    assert ("upsert", "Senior Product Manager", "usr_manager", ["usr_recruiter"], "published") in calls
+    assert any(call[0] == "event" and call[1] == "world.requisition.updated" for call in calls)
+
+    with pytest.raises(HTTPException) as wrong_role:
+        asyncio.run(server.update_ats_requisition(
+            "req_alpha", server.RequisitionOperationalUpdateRequest(recruiter_ids=["usr_wrong_role"]), recruiter
+        ))
+    assert wrong_role.value.status_code == 422
+
+    with pytest.raises(HTTPException) as foreign_member:
+        asyncio.run(server.update_ats_requisition(
+            "req_alpha", server.RequisitionOperationalUpdateRequest(coordinator_ids=["usr_foreign"]), recruiter
+        ))
+    assert foreign_member.value.status_code == 404
+
+
+def test_requisition_operational_edit_blocks_pipeline_replacement_after_applications_exist(monkeypatch):
+    requisition = server.Requisition(
+        organization_id="org_alpha", requisition_id="req_alpha", title="Product Manager", pipeline_id="pipe_old",
+    )
+
+    class _World:
+        async def get_requisition(self, organization_id, requisition_id):
+            return requisition if (organization_id, requisition_id) == ("org_alpha", "req_alpha") else None
+
+        async def get_pipeline(self, organization_id, pipeline_id):
+            return SimpleNamespace(pipeline_id=pipeline_id) if (organization_id, pipeline_id) == ("org_alpha", "pipe_new") else None
+
+        async def list_applications(self, *_args, **_kwargs):
+            return [SimpleNamespace(application_id="app_existing")]
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "db", SimpleNamespace(users=SimpleNamespace(find_one=None)))
+    recruiter = SimpleNamespace(user_id="usr_actor", organization_id="org_alpha", role=Role.RECRUITER)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(server.update_ats_requisition(
+            "req_alpha", server.RequisitionOperationalUpdateRequest(pipeline_id="pipe_new"), recruiter
+        ))
+    assert exc.value.status_code == 409
+    assert "Pipeline cannot change after applications" in exc.value.detail
+
+
 def test_operational_requisition_request_preserves_complete_hiring_plan_fields():
     request = server.RequisitionCreateRequest(
         title="Senior Product Designer",

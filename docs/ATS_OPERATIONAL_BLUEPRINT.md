@@ -17,6 +17,8 @@ EAROS will treat a **requisition** as the approved operating container for hirin
 | Process design | Pipeline template, stage SLAs, stage owners, application questions, source/referral settings, interview plan, scorecard template, offer approval route | The selected configuration is snapshotted into applications to preserve provenance. |
 | Publication | Career site, internal jobs, referral intake, provider targets, localized versions, publication history | Provider targets remain draft-only until an approved connector exists. |
 
+Requisition detail edits are auditable planning operations. EAROS validates hiring-manager, recruiter, coordinator, and offer-approver user references against the active tenant and role constraints before saving. Publication state, candidate-facing questions, and application state are deliberately excluded from this editor. A pipeline can be changed only before the requisition has applications, preserving lifecycle provenance.
+
 ## Candidate and application operations
 
 The recruiter workbench will provide separate but connected views: **My work**, **Requisitions**, **Pipeline**, **Candidate CRM**, **Interviews**, **Offers**, and **Reporting**. Pipeline controls will support stage movement, filter/search, bulk review, disqualification, withdrawal, restore, assignment, source review, and timeline access. Every move will write a stage-history record with acting user, source stage, target stage, timestamp, reason, and supporting notes. Terminal outcomes preserve the independent decision gate.

@@ -709,6 +709,80 @@ class RequisitionPublicationUpdateRequest(BaseModel):
     referral_intake_enabled: Optional[bool] = None
 
 
+class RequisitionOperationalUpdateRequest(BaseModel):
+    """Editable planning fields. Publication, application questions, and candidate state have separate controls."""
+    title: Optional[str] = Field(default=None, min_length=2, max_length=200)
+    requisition_code: Optional[str] = Field(default=None, max_length=80)
+    department_id: Optional[str] = None
+    team_id: Optional[str] = None
+    hiring_manager_id: Optional[str] = None
+    recruiter_ids: Optional[list[str]] = Field(default=None, max_length=50)
+    coordinator_ids: Optional[list[str]] = Field(default=None, max_length=50)
+    headcount: Optional[int] = Field(default=None, ge=1, le=1000)
+    headcount_type: Optional[str] = Field(default=None, pattern="^(new|replacement|backfill|evergreen)$")
+    replacement_for: Optional[str] = Field(default=None, max_length=200)
+    employment_type: Optional[str] = Field(default=None, max_length=80)
+    seniority: Optional[str] = Field(default=None, max_length=120)
+    work_arrangement: Optional[str] = Field(default=None, pattern="^(onsite|hybrid|remote|flexible)$")
+    location: Optional[str] = Field(default=None, max_length=200)
+    country: Optional[str] = Field(default=None, max_length=100)
+    additional_locations: Optional[list[str]] = Field(default=None, max_length=25)
+    cost_center: Optional[str] = Field(default=None, max_length=120)
+    priority: Optional[str] = Field(default=None, pattern="^(low|normal|high|critical)$")
+    compensation: Optional[dict[str, Any]] = None
+    internal_description: Optional[str] = Field(default=None, max_length=40_000)
+    public_description: Optional[str] = Field(default=None, max_length=40_000)
+    responsibilities: Optional[list[str]] = Field(default=None, max_length=100)
+    required_skills: Optional[list[str]] = Field(default=None, max_length=250)
+    preferred_skills: Optional[list[str]] = Field(default=None, max_length=250)
+    evaluation_plan: Optional[dict[str, Any]] = None
+    stage_slas: Optional[dict[str, Any]] = None
+    offer_approval_route: Optional[list[str]] = Field(default=None, max_length=25)
+    compliance: Optional[dict[str, Any]] = None
+    visibility: Optional[str] = Field(default=None, pattern="^(internal|confidential|public)$")
+    target_start_date: Optional[str] = None
+    target_close_date: Optional[str] = None
+    hiring_plan: Optional[dict[str, Any]] = None
+    pipeline_id: Optional[str] = None
+
+
+async def _validate_requisition_member_assignments(
+    organization_id: str,
+    *,
+    hiring_manager_id: Optional[str],
+    recruiter_ids: list[str],
+    coordinator_ids: list[str],
+    offer_approval_route: list[str],
+) -> None:
+    assignments = {
+        "hiring manager": [hiring_manager_id] if hiring_manager_id else [],
+        "recruiter": recruiter_ids,
+        "coordinator": coordinator_ids,
+        "offer approver": offer_approval_route,
+    }
+    members: dict[str, dict[str, Any]] = {}
+    for member_id in dict.fromkeys(member_id for ids in assignments.values() for member_id in ids if member_id):
+        member = await db.users.find_one(
+            {"user_id": member_id, "organization_id": organization_id}, {"_id": 0}
+        )
+        if not member:
+            raise HTTPException(status_code=404, detail="Assigned requisition member not found in this organization")
+        members[member_id] = member
+
+    def role_for(member_id: str) -> str:
+        value = members[member_id].get("role", "")
+        return getattr(value, "value", value)
+
+    if hiring_manager_id and role_for(hiring_manager_id) not in {Role.ADMIN.value, Role.HIRING_MANAGER.value}:
+        raise HTTPException(status_code=422, detail="Assigned hiring manager must have an admin or hiring manager role")
+    for recruiter_id in recruiter_ids:
+        if role_for(recruiter_id) not in {Role.ADMIN.value, Role.RECRUITER.value}:
+            raise HTTPException(status_code=422, detail="Assigned recruiters must have an admin or recruiter role")
+    for coordinator_id in coordinator_ids:
+        if role_for(coordinator_id) not in {Role.ADMIN.value, Role.RECRUITER.value, Role.HIRING_MANAGER.value}:
+            raise HTTPException(status_code=422, detail="Assigned coordinators must be active recruiting-team members")
+
+
 @app.get("/api/ats/requisitions")
 async def list_ats_requisitions(user: AppUser = Depends(_current_user)):
     return [requisition.model_dump() for requisition in await world.list_requisitions(user.organization_id)]
@@ -721,6 +795,13 @@ async def create_ats_requisition(req: RequisitionCreateRequest, user: AppUser = 
         raise HTTPException(status_code=404, detail="Pipeline not found")
     if req.job_id:
         await _scoped_job(req.job_id, user)
+    await _validate_requisition_member_assignments(
+        user.organization_id,
+        hiring_manager_id=req.hiring_manager_id,
+        recruiter_ids=req.recruiter_ids,
+        coordinator_ids=req.coordinator_ids,
+        offer_approval_route=req.offer_approval_route,
+    )
     requisition = await world.upsert_requisition(Requisition(
         organization_id=user.organization_id,
         created_by_user_id=user.user_id,
@@ -742,6 +823,57 @@ async def create_ats_requisition(req: RequisitionCreateRequest, user: AppUser = 
         event_type="requisition.created",
         actor_user_id=user.user_id,
         payload={"title": requisition.title},
+    ))
+    return requisition.model_dump()
+
+
+@app.get("/api/ats/requisitions/{requisition_id}")
+async def get_ats_requisition(requisition_id: str, user: AppUser = Depends(_current_user)):
+    _require_role(user, Role.ADMIN, Role.RECRUITER, Role.HIRING_MANAGER)
+    return (await _scoped_requisition(requisition_id, user)).model_dump()
+
+
+@app.patch("/api/ats/requisitions/{requisition_id}")
+async def update_ats_requisition(
+    requisition_id: str, req: RequisitionOperationalUpdateRequest, user: AppUser = Depends(_current_user)
+):
+    _require_role(user, Role.ADMIN, Role.RECRUITER)
+    requisition = await _scoped_requisition(requisition_id, user)
+    update = req.model_dump(exclude_unset=True)
+    if not update:
+        raise HTTPException(status_code=400, detail="Provide at least one operational requisition field to update")
+    pipeline_id = update.get("pipeline_id", requisition.pipeline_id)
+    if pipeline_id and not await world.get_pipeline(user.organization_id, pipeline_id):
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline_id != requisition.pipeline_id:
+        applications = await world.list_applications(user.organization_id, requisition_id=requisition.requisition_id)
+        if applications:
+            raise HTTPException(status_code=409, detail="Pipeline cannot change after applications are received")
+    await _validate_requisition_member_assignments(
+        user.organization_id,
+        hiring_manager_id=update.get("hiring_manager_id", requisition.hiring_manager_id),
+        recruiter_ids=update.get("recruiter_ids", requisition.recruiter_ids),
+        coordinator_ids=update.get("coordinator_ids", requisition.coordinator_ids),
+        offer_approval_route=update.get("offer_approval_route", requisition.offer_approval_route),
+    )
+    for field, value in update.items():
+        setattr(requisition, field, value)
+    requisition = await world.upsert_requisition(requisition)
+    await governance.emit(DomainEvent(
+        event_type=EventType.REQUISITION_UPDATED,
+        actor=f"user:{user.user_id}",
+        subject_type="requisition",
+        subject_id=requisition.requisition_id,
+        organization_id=user.organization_id,
+        payload={"updated_fields": sorted(update), "pipeline_id": requisition.pipeline_id},
+    ))
+    await world.record_activity(ActivityRecord(
+        organization_id=user.organization_id,
+        entity_type="requisition",
+        entity_id=requisition.requisition_id,
+        event_type="requisition.updated",
+        actor_user_id=user.user_id,
+        payload={"updated_fields": sorted(update)},
     ))
     return requisition.model_dump()
 
