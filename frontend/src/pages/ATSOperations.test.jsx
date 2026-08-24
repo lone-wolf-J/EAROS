@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { COLLABORATION_GUARDRAILS, HIRING_DECISION_GUARDRAILS, HIRING_PLAN_GUARDRAILS, OFFER_GUARDRAILS, TABS, formatDate } from "./ATSOperations";
+import { COLLABORATION_GUARDRAILS, HIRING_DECISION_GUARDRAILS, HIRING_PLAN_GUARDRAILS, OPERATIONAL_REQUISITION_GUARDRAILS, OFFER_GUARDRAILS, TABS, formatDate } from "./ATSOperations";
 import { AUTONOMY_GUARDRAILS, WORKFLOW_DEFINITIONS } from "./ATSAutonomy";
 import { CONTROL_PANELS, canManageEnterpriseControls } from "./EnterpriseControls";
 import { CAREER_SITE_GUARDRAILS } from "./CareerSite";
@@ -63,6 +63,14 @@ describe("ATS Operations route contract", () => {
       "hiring_plan_is_tenant_scoped_within_the_requisition_record",
       "plan_captures_business_justification_budget_owner_and_target_dates",
       "planning_inputs_do_not_publish_or_change_candidate_status",
+    ]);
+  });
+
+  it("keeps the operational requisition complete while retaining publication and candidate-contact controls", () => {
+    expect(OPERATIONAL_REQUISITION_GUARDRAILS).toEqual([
+      "requisition_captures_workforce_plan_and_job_definition",
+      "compensation_and_process_design_remain_tenant_scoped",
+      "creation_does_not_publish_or_contact_candidates",
     ]);
   });
 

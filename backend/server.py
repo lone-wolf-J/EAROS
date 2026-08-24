@@ -664,13 +664,34 @@ async def create_ats_pipeline(req: PipelineUpsertRequest, user: AppUser = Depend
 
 class RequisitionCreateRequest(BaseModel):
     title: str = Field(min_length=2, max_length=200)
+    requisition_code: Optional[str] = Field(default=None, max_length=80)
     department_id: Optional[str] = None
     team_id: Optional[str] = None
     hiring_manager_id: Optional[str] = None
     recruiter_ids: list[str] = Field(default_factory=list, max_length=50)
+    coordinator_ids: list[str] = Field(default_factory=list, max_length=50)
     headcount: int = Field(default=1, ge=1, le=1000)
+    headcount_type: str = Field(default="new", pattern="^(new|replacement|backfill|evergreen)$")
+    replacement_for: Optional[str] = Field(default=None, max_length=200)
     employment_type: str = Field(default="full_time", max_length=80)
+    seniority: Optional[str] = Field(default=None, max_length=120)
+    work_arrangement: str = Field(default="onsite", pattern="^(onsite|hybrid|remote|flexible)$")
     location: Optional[str] = Field(default=None, max_length=200)
+    country: Optional[str] = Field(default=None, max_length=100)
+    additional_locations: list[str] = Field(default_factory=list, max_length=25)
+    cost_center: Optional[str] = Field(default=None, max_length=120)
+    priority: str = Field(default="normal", pattern="^(low|normal|high|critical)$")
+    compensation: dict[str, Any] = Field(default_factory=dict)
+    internal_description: Optional[str] = Field(default=None, max_length=40_000)
+    public_description: Optional[str] = Field(default=None, max_length=40_000)
+    responsibilities: list[str] = Field(default_factory=list, max_length=100)
+    required_skills: list[str] = Field(default_factory=list, max_length=250)
+    preferred_skills: list[str] = Field(default_factory=list, max_length=250)
+    evaluation_plan: dict[str, Any] = Field(default_factory=dict)
+    stage_slas: dict[str, Any] = Field(default_factory=dict)
+    offer_approval_route: list[str] = Field(default_factory=list, max_length=25)
+    compliance: dict[str, Any] = Field(default_factory=dict)
+    visibility: str = Field(default="internal", pattern="^(internal|confidential|public)$")
     target_start_date: Optional[str] = None
     target_close_date: Optional[str] = None
     hiring_plan: dict[str, Any] = Field(default_factory=dict)

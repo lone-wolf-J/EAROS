@@ -1473,6 +1473,37 @@ def test_application_stage_movement_is_recruiter_controlled_and_terminal_outcome
     assert ("event", "world.application.stage_changed", "Interview") in calls
 
 
+def test_operational_requisition_request_preserves_complete_hiring_plan_fields():
+    request = server.RequisitionCreateRequest(
+        title="Senior Product Designer",
+        requisition_code="DES-2026-014",
+        headcount=2,
+        headcount_type="replacement",
+        employment_type="full_time",
+        seniority="IC4",
+        work_arrangement="hybrid",
+        location="San Francisco",
+        country="United States",
+        cost_center="CC-420",
+        priority="high",
+        compensation={"currency": "USD", "salary_min": 150000, "salary_max": 190000},
+        internal_description="Confidential growth hire.",
+        public_description="Design our enterprise recruiting experience.",
+        required_skills=["Product design", "Research"],
+        preferred_skills=["ATS experience"],
+        evaluation_plan={"scorecard_required": True},
+    )
+
+    assert request.requisition_code == "DES-2026-014"
+    assert request.headcount_type == "replacement"
+    assert request.work_arrangement == "hybrid"
+    assert request.compensation["salary_max"] == 190000
+    assert request.evaluation_plan["scorecard_required"] is True
+
+    with pytest.raises(ValueError):
+        server.RequisitionCreateRequest(title="Unsafe", work_arrangement="wherever")
+
+
 def test_offer_draft_is_tenant_scoped_audited_and_never_extended_by_creation(monkeypatch):
     calls = []
 

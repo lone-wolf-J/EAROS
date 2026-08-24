@@ -166,13 +166,34 @@ class Requisition(BaseModel):
     organization_id: str
     job_id: Optional[str] = None
     title: str
+    requisition_code: Optional[str] = None
     department_id: Optional[str] = None
     team_id: Optional[str] = None
     hiring_manager_id: Optional[str] = None
     recruiter_ids: list[str] = Field(default_factory=list)
+    coordinator_ids: list[str] = Field(default_factory=list)
     headcount: int = Field(default=1, ge=1)
+    headcount_type: str = "new"
+    replacement_for: Optional[str] = None
     employment_type: str = "full_time"
+    seniority: Optional[str] = None
+    work_arrangement: str = "onsite"
     location: Optional[str] = None
+    country: Optional[str] = None
+    additional_locations: list[str] = Field(default_factory=list)
+    cost_center: Optional[str] = None
+    priority: str = "normal"
+    compensation: dict[str, Any] = Field(default_factory=dict)
+    internal_description: Optional[str] = None
+    public_description: Optional[str] = None
+    responsibilities: list[str] = Field(default_factory=list)
+    required_skills: list[str] = Field(default_factory=list)
+    preferred_skills: list[str] = Field(default_factory=list)
+    evaluation_plan: dict[str, Any] = Field(default_factory=dict)
+    stage_slas: dict[str, Any] = Field(default_factory=dict)
+    offer_approval_route: list[str] = Field(default_factory=list)
+    compliance: dict[str, Any] = Field(default_factory=dict)
+    visibility: str = "internal"
     target_start_date: Optional[str] = None
     target_close_date: Optional[str] = None
     hiring_plan: dict[str, Any] = Field(default_factory=dict)
