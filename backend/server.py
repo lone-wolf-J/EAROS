@@ -1532,6 +1532,10 @@ class ApplicationStageRequest(BaseModel):
     reason: Optional[str] = Field(default=None, max_length=1000)
 
 
+class BulkApplicationStageRequest(ApplicationStageRequest):
+    application_ids: list[str] = Field(min_length=1, max_length=100)
+
+
 class ApplicationReactivationCreateRequest(BaseModel):
     target_stage_id: Optional[str] = None
     target_stage_name: str = Field(min_length=1, max_length=120)
@@ -1575,6 +1579,31 @@ async def _validate_application_stage_transition(application: Application, req: 
             status_code=409,
             detail="Terminal pipeline stages require an approval-gated hiring decision",
         )
+    current_stages = [
+        item for item in pipeline.stages
+        if (application.current_stage_id and item.stage_id == application.current_stage_id)
+        or (not application.current_stage_id and item.name == application.current_stage_name)
+    ]
+    current_stage = current_stages[0] if len(current_stages) == 1 else None
+    is_stage_change = stage.stage_id != application.current_stage_id or stage.name != application.current_stage_name
+    if current_stage and current_stage.requires_feedback and is_stage_change:
+        interviews = await world.list_interviews(
+            application.organization_id, application_id=application.application_id
+        )
+        stage_interviews = [
+            interview for interview in interviews if interview.stage_id == current_stage.stage_id
+        ]
+        for interview in stage_interviews:
+            feedback = await world.list_interview_feedback(
+                application.organization_id, interview.interview_id
+            )
+            if feedback:
+                break
+        else:
+            raise HTTPException(
+                status_code=409,
+                detail=f"At least one submitted interview feedback record is required before leaving {current_stage.name}",
+            )
 
 
 async def _validate_application_reactivation_target(
@@ -1646,6 +1675,83 @@ async def move_ats_application_stage(
         entity_type="application", entity_id=application.application_id, actor_user_id=user.user_id,
     )
     return application.model_dump()
+
+
+@app.post("/api/ats/applications/bulk-stage")
+async def move_ats_applications_bulk_stage(
+    req: BulkApplicationStageRequest, user: AppUser = Depends(_current_user)
+):
+    """Move a bounded set of active applications only after every tenant-scoped validation succeeds."""
+    _require_role(user, Role.ADMIN, Role.RECRUITER)
+    application_ids = list(dict.fromkeys(req.application_ids))
+    if len(application_ids) != len(req.application_ids):
+        raise HTTPException(status_code=400, detail="Application identifiers must be unique within a bulk stage action")
+    applications = [await _scoped_application(application_id, user) for application_id in application_ids]
+    for application in applications:
+        await _validate_application_stage_transition(application, req)
+
+    bulk_operation_id = f"bulkstage_{uuid.uuid4().hex}"
+    updated_applications: list[Application] = []
+    for application in applications:
+        previous_name = application.current_stage_name
+        application.current_stage_id = req.stage_id
+        application.current_stage_name = req.stage_name
+        application.stage_history.append({
+            "stage_id": req.stage_id,
+            "stage_name": req.stage_name,
+            "changed_at": utcnow_iso(),
+            "actor_user_id": user.user_id,
+            "reason": req.reason or "bulk_recruiter_workbench",
+            "bulk_operation_id": bulk_operation_id,
+        })
+        updated = await world.upsert_application(application)
+        updated_applications.append(updated)
+        await governance.emit(DomainEvent(
+            event_type=EventType.APPLICATION_STAGE_CHANGED,
+            actor=f"user:{user.user_id}",
+            subject_type="application",
+            subject_id=updated.application_id,
+            organization_id=user.organization_id,
+            payload={
+                "from": previous_name,
+                "to": req.stage_name,
+                "reason": req.reason or "bulk_recruiter_workbench",
+                "bulk_operation_id": bulk_operation_id,
+            },
+            correlation_id=bulk_operation_id,
+        ))
+        await world.record_activity(ActivityRecord(
+            organization_id=user.organization_id,
+            entity_type="application",
+            entity_id=updated.application_id,
+            event_type="application.bulk_stage_changed",
+            actor_user_id=user.user_id,
+            payload={
+                "from": previous_name,
+                "to": req.stage_name,
+                "reason": req.reason or "bulk_recruiter_workbench",
+                "bulk_operation_id": bulk_operation_id,
+            },
+            correlation_id=bulk_operation_id,
+        ))
+    await governance.emit(DomainEvent(
+        event_type=EventType.APPLICATION_BULK_STAGE_CHANGED,
+        actor=f"user:{user.user_id}",
+        subject_type="application_bulk_stage_action",
+        subject_id=bulk_operation_id,
+        organization_id=user.organization_id,
+        payload={
+            "application_ids": application_ids,
+            "target_stage_id": req.stage_id,
+            "target_stage_name": req.stage_name,
+            "count": len(updated_applications),
+        },
+        correlation_id=bulk_operation_id,
+    ))
+    return {
+        "bulk_operation_id": bulk_operation_id,
+        "applications": [application.model_dump() for application in updated_applications],
+    }
 
 
 @app.get("/api/ats/applications/{application_id}/reactivation-requests")
@@ -1907,7 +2013,7 @@ async def create_ats_interview(req: InterviewCreateRequest, user: AppUser = Depe
     interview = await world.upsert_interview(Interview(
         organization_id=user.organization_id,
         created_by_user_id=user.user_id,
-        **req.model_dump(),
+        **{**req.model_dump(), "stage_id": req.stage_id or application.current_stage_id},
     ))
     from foundation import DomainEvent
     await governance.emit(DomainEvent(

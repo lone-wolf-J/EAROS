@@ -169,6 +169,8 @@ export default function ATSOperations() {
   const [applicationRequisitionFilter, setApplicationRequisitionFilter] = useState("");
   const [applicationStageFilter, setApplicationStageFilter] = useState("");
   const [applicationSourceFilter, setApplicationSourceFilter] = useState("");
+  const [selectedApplicationIds, setSelectedApplicationIds] = useState([]);
+  const [bulkApplicationStageId, setBulkApplicationStageId] = useState("");
   const { data: requisitions = [], mutate: mutateRequisitions } = useSWR("/ats/requisitions", fetcher);
   const { data: pipelines = [] } = useSWR("/ats/pipelines", fetcher);
   const { data: applications = [], mutate: mutateApplications } = useSWR("/ats/applications", fetcher);
@@ -191,6 +193,7 @@ export default function ATSOperations() {
   const candidateNotificationPath = selectedActivityCandidateId ? `/ats/candidates/${selectedActivityCandidateId}/notification-deliveries` : null;
   const { data: candidateNotificationDeliveries = [], mutate: mutateCandidateNotificationDeliveries } = useSWR(candidateNotificationPath, fetcher);
   const { data: hiringDecisions = [], mutate: mutateHiringDecisions } = useSWR("/ats/hiring-decisions", fetcher);
+  const { data: dispositionReasons = [] } = useSWR("/ats/disposition-reasons", fetcher);
   const { data: offers = [], mutate: mutateOffers } = useSWR("/ats/offers", fetcher);
   const { data: handoffs = [], mutate: mutateHandoffs } = useSWR("/ats/onboarding-handoffs", fetcher);
 
@@ -249,6 +252,13 @@ export default function ATSOperations() {
     { stage_id: "interview", name: "Interview", category: "active" },
     { stage_id: "offer", name: "Offer", category: "active" },
   ]).filter((stage) => !String(stage.category || "active").startsWith("terminal_"));
+  const selectedActiveApplications = useMemo(() => applications.filter((application) => selectedApplicationIds.includes(application.application_id) && application.status === "active"), [applications, selectedApplicationIds]);
+  const bulkApplicationStages = useMemo(() => {
+    if (!selectedActiveApplications.length) return [];
+    const candidateStages = applicationStages(selectedActiveApplications[0]);
+    return candidateStages.filter((stage) => selectedActiveApplications.every((application) => applicationStages(application).some((item) => item.stage_id === stage.stage_id && item.name === stage.name)));
+  }, [selectedActiveApplications, pipelineById]);
+  const bulkApplicationTarget = bulkApplicationStages.find((stage) => stage.stage_id === bulkApplicationStageId);
   const moveApplicationStage = async (application) => {
     const target = applicationStages(application).find((stage) => stage.stage_id === stageDrafts[application.application_id]);
     if (!target || target.name === application.current_stage_name) return;
@@ -272,6 +282,24 @@ export default function ATSOperations() {
     } catch (requestError) {
       const detail = requestError?.response?.data?.detail;
       setError(typeof detail === "string" ? detail : "EAROS could not queue this governed reactivation request.");
+    } finally { setSaving(false); }
+  };
+
+  const runBulkApplicationStageMove = async () => {
+    if (!selectedActiveApplications.length || !bulkApplicationTarget) return;
+    setError(""); setSaving(true);
+    try {
+      await api.post("/ats/applications/bulk-stage", {
+        application_ids: selectedActiveApplications.map((application) => application.application_id),
+        stage_id: bulkApplicationTarget.stage_id,
+        stage_name: bulkApplicationTarget.name,
+        reason: "bulk_recruiter_workbench",
+      });
+      setSelectedApplicationIds([]); setBulkApplicationStageId("");
+      await mutateApplications();
+    } catch (requestError) {
+      const detail = requestError?.response?.data?.detail;
+      setError(typeof detail === "string" ? detail : "EAROS could not complete the bulk pipeline action.");
     } finally { setSaving(false); }
   };
 
@@ -406,6 +434,8 @@ export default function ATSOperations() {
 
               {tab === "candidates" && <CandidateCRMWorkspace candidates={crmCandidates} tags={candidateTags} pools={pools} query={crmQuery} setQuery={setCrmQuery} selectedCandidateIds={selectedCandidateIds} setSelectedCandidateIds={setSelectedCandidateIds} bulkAction={bulkAction} setBulkAction={setBulkAction} bulkTags={bulkTags} setBulkTags={setBulkTags} bulkSource={bulkSource} setBulkSource={setBulkSource} bulkPoolId={bulkPoolId} setBulkPoolId={setBulkPoolId} saving={saving} onRunBulkAction={runBulkAction} onViewActivity={(candidateId) => { setSelectedActivityCandidateId(candidateId); setTab("collaboration"); }} />}
 
+              {tab === "applications" && applications.length > 0 && <ApplicationBulkStageWorkspace applications={filteredApplications} candidates={candidateById} selectedApplicationIds={selectedApplicationIds} setSelectedApplicationIds={setSelectedApplicationIds} stages={bulkApplicationStages} targetStageId={bulkApplicationStageId} setTargetStageId={setBulkApplicationStageId} saving={saving} onMove={runBulkApplicationStageMove} />}
+
               {tab === "applications" && (applications.length ? (
                 <div className="space-y-3"><div className="grid gap-2 rounded-sm border border-slate-800 bg-slate-950/40 p-3 md:grid-cols-4"><input value={applicationQuery} onChange={(event) => setApplicationQuery(event.target.value)} className={inputClass} placeholder="Search candidate or stage" /><select value={applicationRequisitionFilter} onChange={(event) => setApplicationRequisitionFilter(event.target.value)} className={inputClass}><option value="">All requisitions</option>{requisitions.map((requisition) => <option key={requisition.requisition_id} value={requisition.requisition_id}>{requisition.title}</option>)}</select><select value={applicationStageFilter} onChange={(event) => setApplicationStageFilter(event.target.value)} className={inputClass}><option value="">All stages</option>{[...new Set(applications.map((item) => item.current_stage_name))].map((stage) => <option key={stage} value={stage}>{stage}</option>)}</select><select value={applicationSourceFilter} onChange={(event) => setApplicationSourceFilter(event.target.value)} className={inputClass}><option value="">All sources</option>{[...new Set(applications.map((item) => item.source))].map((source) => <option key={source} value={source}>{source}</option>)}</select></div><div className="flex items-center justify-between px-1 font-mono2 text-[10px] tracking-wider text-slate-500"><span>RECRUITER WORK QUEUE</span><span>{filteredApplications.length} of {applications.length} applications</span></div><div className="grid gap-3 lg:grid-cols-2">
                   {filteredApplications.map((application) => {
@@ -451,13 +481,21 @@ export default function ATSOperations() {
         {modal === "mention" && <CollaborationMentionForm candidate={candidateById.get(selectedActivityCandidateId)} feedback={interviewFeedback} saving={saving} onClose={() => setModal(null)} onSubmit={submitCandidateMention} />}
         {modal === "communication" && <CandidateCommunicationForm candidate={candidateById.get(selectedActivityCandidateId)} saving={saving} onClose={() => setModal(null)} onSubmit={recordCandidateCommunication} />}
         {modal === "candidate-notification" && <CandidateNotificationForm candidate={candidateById.get(selectedActivityCandidateId)} saving={saving} onClose={() => setModal(null)} onSubmit={recordCandidateNotification} />}
-        {modal === "hiring-decision" && <HiringDecisionForm applications={applications} candidates={candidateById} saving={saving} onClose={() => setModal(null)} onSubmit={(body) => create("/ats/hiring-decisions", body, mutateHiringDecisions)} />}
+        {modal === "hiring-decision" && <HiringDecisionForm applications={applications} candidates={candidateById} dispositionReasons={dispositionReasons} saving={saving} onClose={() => setModal(null)} onSubmit={(body) => create("/ats/hiring-decisions", body, mutateHiringDecisions)} />}
         {modal === "reactivation" && <ApplicationReactivationForm applications={applications} candidates={candidateById} pipelines={pipelines} saving={saving} onClose={() => setModal(null)} onSubmit={requestApplicationReactivation} />}
         {modal === "offer" && <OfferDraftForm applications={applications} candidates={candidateById} saving={saving} onClose={() => setModal(null)} onSubmit={(body) => create("/ats/offers", body, mutateOffers)} />}
         {modal === "handoff" && <HandoffForm offers={offers} candidates={candidateById} saving={saving} onClose={() => setModal(null)} onSubmit={(body) => create("/ats/onboarding-handoffs", body, mutateHandoffs)} />}
       </div>
     </AppLayout>
   );
+}
+
+function ApplicationBulkStageWorkspace({ applications, candidates, selectedApplicationIds, setSelectedApplicationIds, stages, targetStageId, setTargetStageId, saving, onMove }) {
+  const selected = new Set(selectedApplicationIds);
+  const activeApplications = applications.filter((application) => application.status === "active");
+  const toggle = (applicationId) => setSelectedApplicationIds((current) => current.includes(applicationId) ? current.filter((id) => id !== applicationId) : [...current, applicationId]);
+  const selectVisible = () => setSelectedApplicationIds(activeApplications.map((application) => application.application_id));
+  return <section className="mb-4 rounded-sm border border-teal-500/20 bg-teal-500/5 p-3" data-testid="application-bulk-stage-workspace"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="font-mono2 text-[10px] tracking-widest text-teal-300">AUDITABLE BULK PIPELINE ACTION</div><p className="mt-1 text-xs leading-5 text-slate-400">Select active applications, then move them to a stage common to their configured pipelines. EAROS validates every record before mutation and never permits bulk hire, rejection, or reactivation.</p></div><button type="button" disabled={!activeApplications.length} onClick={selectVisible} className="rounded-sm border border-slate-700 px-2.5 py-1.5 text-xs font-semibold text-slate-300 transition hover:border-teal-400 hover:text-teal-100 disabled:cursor-not-allowed disabled:opacity-40">Select visible active</button></div><div className="mt-3 grid gap-2 md:grid-cols-[1fr_1fr_auto]"><select aria-label="Bulk application target stage" value={targetStageId} onChange={(event) => setTargetStageId(event.target.value)} className={inputClass}><option value="">Move selected to active stage…</option>{stages.map((stage) => <option key={stage.stage_id} value={stage.stage_id}>{stage.name}</option>)}</select><div className="rounded-sm border border-slate-800 bg-slate-950/45 px-3 py-2 text-xs text-slate-400">{selectedApplicationIds.length} selected · {activeApplications.length} active in this view</div><button type="button" disabled={saving || !selectedApplicationIds.length || !targetStageId} onClick={onMove} className="rounded-sm border border-teal-400/40 bg-teal-400/10 px-3 py-2 text-xs font-bold text-teal-100 transition hover:bg-teal-400/20 disabled:cursor-not-allowed disabled:opacity-40">Move selected</button></div><div className="mt-3 grid gap-2 md:grid-cols-2">{activeApplications.map((application) => <label key={application.application_id} className="flex items-center gap-2 rounded-sm border border-slate-800 bg-slate-950/45 px-3 py-2 text-xs text-slate-300"><input aria-label={`Select application for ${candidates.get(application.candidate_id)?.full_name || application.candidate_id}`} type="checkbox" checked={selected.has(application.application_id)} onChange={() => toggle(application.application_id)} className="h-4 w-4 accent-teal-400" /><span className="min-w-0 truncate">{candidates.get(application.candidate_id)?.full_name || application.candidate_id} · {application.current_stage_name}</span></label>)}</div>{applications.some((application) => ["hired", "rejected"].includes(application.status)) && <div className="mt-3 font-mono2 text-[10px] text-amber-200">TERMINAL RECORDS EXCLUDED · Hire/reject corrections require a separate independent reactivation approval.</div>}</section>;
 }
 
 function CandidateCRMWorkspace({ candidates, tags, pools, query, setQuery, selectedCandidateIds, setSelectedCandidateIds, bulkAction, setBulkAction, bulkTags, setBulkTags, bulkSource, setBulkSource, bulkPoolId, setBulkPoolId, saving, onRunBulkAction, onViewActivity }) {
@@ -532,10 +570,11 @@ function JobDistributionWorkspace({ requisitions, adapters, selectedRequisitionI
 
 function FormActions({ saving, onClose, label }) { return <div className="flex justify-end gap-2 border-t border-slate-800 px-5 py-4"><button type="button" onClick={onClose} className="rounded-sm px-3 py-2 text-sm text-slate-400 hover:bg-slate-800">Cancel</button><button disabled={saving} className="rounded-sm bg-gradient-to-r from-violet-600 to-teal-500 px-3 py-2 text-sm font-bold text-white disabled:cursor-wait disabled:opacity-60">{saving ? "Saving…" : label}</button></div>; }
 
-function HiringDecisionForm({ applications, candidates, saving, onClose, onSubmit }) {
-  const [applicationId, setApplicationId] = useState(""); const [outcome, setOutcome] = useState("hire"); const [rationale, setRationale] = useState("");
+function HiringDecisionForm({ applications, candidates, dispositionReasons, saving, onClose, onSubmit }) {
+  const [applicationId, setApplicationId] = useState(""); const [outcome, setOutcome] = useState("hire"); const [dispositionReasonCode, setDispositionReasonCode] = useState(""); const [rationale, setRationale] = useState("");
   const activeApplications = applications.filter((application) => application.status === "active");
-  return <Modal title="Request hiring decision review" onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); onSubmit({ application_id: applicationId, outcome, rationale }); }}><div className="grid gap-4 px-5 py-5"><div className="rounded-sm border border-amber-400/25 bg-amber-400/5 px-3 py-2 text-xs leading-5 text-amber-100">This request cannot directly hire or reject a candidate. It enters the EAROS Governance queue, and the requester cannot approve or deny their own decision.</div><Field label="ACTIVE APPLICATION"><select required value={applicationId} onChange={(event) => setApplicationId(event.target.value)} className={inputClass}><option value="">Select an active application</option>{activeApplications.map((application) => <option key={application.application_id} value={application.application_id}>{candidates.get(application.candidate_id)?.full_name || application.candidate_id} · {application.current_stage_name}</option>)}</select></Field><Field label="PROPOSED OUTCOME"><select value={outcome} onChange={(event) => setOutcome(event.target.value)} className={inputClass}><option value="hire">Hire</option><option value="reject">Reject</option></select></Field><Field label="EVIDENCE-BASED RATIONALE"><textarea required minLength="10" value={rationale} onChange={(event) => setRationale(event.target.value)} className={`${inputClass} min-h-28 resize-y`} placeholder="Summarize the job-related evidence and panel review supporting this request." /></Field></div><FormActions saving={saving} onClose={onClose} label="Queue for approval" /></form></Modal>;
+  const rejectionReasons = dispositionReasons.filter((reason) => reason.category === "rejected" && reason.is_active);
+  return <Modal title="Request hiring decision review" onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); onSubmit({ application_id: applicationId, outcome, rationale, disposition_reason_code: outcome === "reject" && dispositionReasonCode ? dispositionReasonCode : null }); }}><div className="grid gap-4 px-5 py-5"><div className="rounded-sm border border-amber-400/25 bg-amber-400/5 px-3 py-2 text-xs leading-5 text-amber-100">This request cannot directly hire or reject a candidate. It enters the EAROS Governance queue, and the requester cannot approve or deny their own decision.</div><Field label="ACTIVE APPLICATION"><select required value={applicationId} onChange={(event) => setApplicationId(event.target.value)} className={inputClass}><option value="">Select an active application</option>{activeApplications.map((application) => <option key={application.application_id} value={application.application_id}>{candidates.get(application.candidate_id)?.full_name || application.candidate_id} · {application.current_stage_name}</option>)}</select></Field><Field label="PROPOSED OUTCOME"><select value={outcome} onChange={(event) => { setOutcome(event.target.value); if (event.target.value !== "reject") setDispositionReasonCode(""); }} className={inputClass}><option value="hire">Hire</option><option value="reject">Reject</option></select></Field>{outcome === "reject" && <Field label="REJECTION DISPOSITION"><select value={dispositionReasonCode} onChange={(event) => setDispositionReasonCode(event.target.value)} className={inputClass}><option value="">No taxonomy reason selected</option>{rejectionReasons.map((reason) => <option key={reason.disposition_reason_id} value={reason.code}>{reason.label}</option>)}</select><span className="text-[11px] leading-4 text-slate-500">Optional tenant-owned reason codes make approved outcomes exportable without changing the independent approval gate.</span></Field>}<Field label="EVIDENCE-BASED RATIONALE"><textarea required minLength="10" value={rationale} onChange={(event) => setRationale(event.target.value)} className={`${inputClass} min-h-28 resize-y`} placeholder="Summarize the job-related evidence and panel review supporting this request." /></Field></div><FormActions saving={saving} onClose={onClose} label="Queue for approval" /></form></Modal>;
 }
 
 function ApplicationReactivationForm({ applications, candidates, pipelines, saving, onClose, onSubmit }) {

@@ -223,6 +223,7 @@ class EventType(str, Enum):
     APPLICATION_WITHDRAWN = "world.application.withdrawn"
     REFERRAL_INTAKE_RECORDED = "world.referral_intake.recorded"
     APPLICATION_STAGE_CHANGED = "world.application.stage_changed"
+    APPLICATION_BULK_STAGE_CHANGED = "world.application.bulk_stage_changed"
     REQUISITION_CREATED = "world.requisition.created"
     REQUISITION_PUBLICATION_UPDATED = "world.requisition.publication_updated"
     INTERVIEW_SCHEDULED = "world.interview.scheduled"

@@ -1738,6 +1738,124 @@ def test_application_stage_movement_is_recruiter_controlled_and_terminal_outcome
     assert ("event", "world.application.stage_changed", "Interview") in calls
 
 
+def test_feedback_required_pipeline_stage_blocks_exit_until_linked_interview_feedback_exists(monkeypatch):
+    pipeline = server.Pipeline(
+        organization_id="org_alpha",
+        name="Evidence-gated hiring",
+        stages=[
+            server.PipelineStageDefinition(stage_id="stage_interview", name="Interview", order=0, requires_feedback=True),
+            server.PipelineStageDefinition(stage_id="stage_offer", name="Offer", order=1),
+        ],
+    )
+    application = server.Application(
+        organization_id="org_alpha", application_id="app_alpha", candidate_id="cand_alpha",
+        pipeline_id=pipeline.pipeline_id, current_stage_id="stage_interview", current_stage_name="Interview",
+    )
+    calls = []
+
+    class _World:
+        async def get_pipeline(self, organization_id, pipeline_id):
+            return pipeline if (organization_id, pipeline_id) == ("org_alpha", pipeline.pipeline_id) else None
+
+        async def list_interviews(self, organization_id, application_id=None, **_kwargs):
+            calls.append(("interviews", organization_id, application_id))
+            return []
+
+        async def list_interview_feedback(self, *_args):
+            calls.append(("feedback",))
+            return []
+
+    monkeypatch.setattr(server, "world", _World())
+    request = server.ApplicationStageRequest(stage_id="stage_offer", stage_name="Offer")
+
+    with pytest.raises(HTTPException) as blocked:
+        asyncio.run(server._validate_application_stage_transition(application, request))
+    assert blocked.value.status_code == 409
+    assert "submitted interview feedback" in blocked.value.detail
+
+    class _WorldWithFeedback(_World):
+        async def list_interviews(self, organization_id, application_id=None, **_kwargs):
+            calls.append(("interviews", organization_id, application_id))
+            return [SimpleNamespace(interview_id="interview_alpha", stage_id="stage_interview")]
+
+        async def list_interview_feedback(self, organization_id, interview_id):
+            calls.append(("feedback", organization_id, interview_id))
+            return [SimpleNamespace(feedback_id="feedback_alpha")]
+
+    monkeypatch.setattr(server, "world", _WorldWithFeedback())
+    asyncio.run(server._validate_application_stage_transition(application, request))
+    assert ("feedback", "org_alpha", "interview_alpha") in calls
+
+
+def test_bulk_application_stage_move_prevalidates_every_record_and_records_shared_audit_provenance(monkeypatch):
+    calls = []
+    applications = {
+        "app_one": server.Application(
+            organization_id="org_alpha", application_id="app_one", candidate_id="cand_one",
+            current_stage_name="Applied",
+        ),
+        "app_two": server.Application(
+            organization_id="org_alpha", application_id="app_two", candidate_id="cand_two",
+            current_stage_name="Applied",
+        ),
+    }
+
+    class _World:
+        async def get_application(self, organization_id, application_id):
+            return applications.get(application_id) if organization_id == "org_alpha" else None
+
+        async def upsert_application(self, application):
+            calls.append(("upsert", application.application_id, application.current_stage_name))
+            return application
+
+        async def record_activity(self, activity):
+            calls.append(("activity", activity.entity_id, activity.event_type, activity.correlation_id))
+            return activity
+
+    class _Governance:
+        async def emit(self, event):
+            calls.append(("event", event.event_type.value, event.subject_id, event.correlation_id))
+            return event
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    recruiter = SimpleNamespace(user_id="recruiter_alpha", organization_id="org_alpha", role=Role.RECRUITER)
+
+    result = asyncio.run(server.move_ats_applications_bulk_stage(
+        server.BulkApplicationStageRequest(
+            application_ids=["app_one", "app_two"], stage_id="stage_screened", stage_name="Screened",
+        ),
+        recruiter,
+    ))
+
+    assert len(result["applications"]) == 2
+    assert all(application.current_stage_name == "Screened" for application in applications.values())
+    bulk_operation_id = result["bulk_operation_id"]
+    assert all(application.stage_history[-1]["bulk_operation_id"] == bulk_operation_id for application in applications.values())
+    assert ("event", "world.application.bulk_stage_changed", bulk_operation_id, bulk_operation_id) in calls
+    assert len([call for call in calls if call[0] == "activity" and call[3] == bulk_operation_id]) == 2
+
+    before_history = [len(application.stage_history) for application in applications.values()]
+    with pytest.raises(HTTPException) as terminal:
+        asyncio.run(server.move_ats_applications_bulk_stage(
+            server.BulkApplicationStageRequest(
+                application_ids=["app_one", "app_two"], stage_id="stage_hired", stage_name="Hired",
+            ),
+            recruiter,
+        ))
+    assert terminal.value.status_code == 409
+    assert [len(application.stage_history) for application in applications.values()] == before_history
+
+    with pytest.raises(HTTPException) as duplicate:
+        asyncio.run(server.move_ats_applications_bulk_stage(
+            server.BulkApplicationStageRequest(
+                application_ids=["app_one", "app_one"], stage_id="stage_interview", stage_name="Interview",
+            ),
+            recruiter,
+        ))
+    assert duplicate.value.status_code == 400
+
+
 def test_operational_requisition_request_preserves_complete_hiring_plan_fields():
     request = server.RequisitionCreateRequest(
         title="Senior Product Designer",

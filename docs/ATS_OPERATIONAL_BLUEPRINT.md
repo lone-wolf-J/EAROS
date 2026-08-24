@@ -23,6 +23,8 @@ The recruiter workbench will provide separate but connected views: **My work**, 
 
 > **Terminal correction rule.** An approved `Hired` or `Rejected` outcome cannot be reversed through ordinary stage movement. EAROS records a separate tenant-scoped reactivation request with the target active stage and evidence-based rationale. Its requester cannot decide it. Only an independent governance grant reactivates the application, preserves the original hiring decision, appends the approval and correction identifiers to stage history, and emits dedicated request/effective/denied events and activity records.
 
+> **Configurable stage-control rule.** When a tenant marks a current pipeline stage as feedback-required, an application cannot leave that stage until a submitted interview-feedback record is linked to the application and that stage. Bulk stage movement performs the same validation for every selected record before any mutation, excludes terminal applications, records a shared bulk-operation correlation identifier in each history/activity record, and emits both per-application and aggregate governance events.
+
 ## Interview and decision operations
 
 Interview plans associate stages with an interview type, duration, timezone, interviewer roles, interview kit, focus competencies, and scorecard. Recruiters can coordinate records and reminders, while a calendar/video provider remains configured-but-inactive until supplied. Feedback is independently authored, has completion visibility, and drives a debrief packet. Offer packages remain internal drafts with version history, approval route, compensation components, and candidate-response record; an accepted handoff is limited to downstream routing metadata.
