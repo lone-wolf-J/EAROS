@@ -174,6 +174,7 @@ export default function ATSOperations() {
   const { data: requisitions = [], mutate: mutateRequisitions } = useSWR("/ats/requisitions", fetcher);
   const { data: pipelines = [] } = useSWR("/ats/pipelines", fetcher);
   const { data: applications = [], mutate: mutateApplications } = useSWR("/ats/applications", fetcher);
+  const { data: pipelineStageAnalytics = { stages: [] } } = useSWR("/ats/analytics/pipeline-time-in-stage", fetcher);
   const { data: pools = [], mutate: mutatePools } = useSWR("/ats/talent-pools", fetcher);
   const { data: interviews = [], mutate: mutateInterviews } = useSWR("/ats/interviews", fetcher);
   const { data: candidates = [], mutate: mutateCandidates } = useSWR("/world/candidates", fetcher);
@@ -434,6 +435,8 @@ export default function ATSOperations() {
 
               {tab === "candidates" && <CandidateCRMWorkspace candidates={crmCandidates} tags={candidateTags} pools={pools} query={crmQuery} setQuery={setCrmQuery} selectedCandidateIds={selectedCandidateIds} setSelectedCandidateIds={setSelectedCandidateIds} bulkAction={bulkAction} setBulkAction={setBulkAction} bulkTags={bulkTags} setBulkTags={setBulkTags} bulkSource={bulkSource} setBulkSource={setBulkSource} bulkPoolId={bulkPoolId} setBulkPoolId={setBulkPoolId} saving={saving} onRunBulkAction={runBulkAction} onViewActivity={(candidateId) => { setSelectedActivityCandidateId(candidateId); setTab("collaboration"); }} />}
 
+              {tab === "applications" && <PipelineStageAnalytics report={pipelineStageAnalytics} />}
+
               {tab === "applications" && applications.length > 0 && <ApplicationBulkStageWorkspace applications={filteredApplications} candidates={candidateById} selectedApplicationIds={selectedApplicationIds} setSelectedApplicationIds={setSelectedApplicationIds} stages={bulkApplicationStages} targetStageId={bulkApplicationStageId} setTargetStageId={setBulkApplicationStageId} saving={saving} onMove={runBulkApplicationStageMove} />}
 
               {tab === "applications" && (applications.length ? (
@@ -489,6 +492,11 @@ export default function ATSOperations() {
       </div>
     </AppLayout>
   );
+}
+
+function PipelineStageAnalytics({ report }) {
+  const stages = report?.stages || [];
+  return <section className="mb-4 rounded-sm border border-indigo-500/20 bg-indigo-500/5 p-3" data-testid="pipeline-stage-analytics"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="font-mono2 text-[10px] tracking-widest text-indigo-200">PIPELINE TIME-IN-STAGE</div><p className="mt-1 text-xs leading-5 text-slate-400">Current-stage dwell time derives only from this tenant’s recorded application history. Blank averages identify legacy records without a trustworthy stage-entry timestamp.</p></div><span className="font-mono2 text-[9px] text-slate-600">GENERATED {formatDate(report?.generated_at)}</span></div>{stages.length ? <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">{stages.slice(0, 8).map((stage) => <div key={`${stage.stage_id || "legacy"}-${stage.stage_name}`} className="rounded-sm border border-slate-800 bg-slate-950/45 p-3"><div className="font-semibold text-slate-100">{stage.stage_name}</div><div className="mt-2 text-lg font-black text-indigo-100">{stage.average_time_in_stage_hours == null ? "—" : `${stage.average_time_in_stage_hours}h`}</div><div className="mt-1 font-mono2 text-[9px] text-slate-500">{stage.applications} RECORDS · {stage.timed_applications} TIMED</div></div>)}</div> : <div className="mt-3 rounded-sm border border-dashed border-slate-700 px-3 py-4 text-center text-xs text-slate-500">No application stage history is available yet for tenant-scoped dwell-time reporting.</div>}</section>;
 }
 
 function ApplicationWorkQueueCard({ application, candidate, requisition, pipeline, stages, stageValue, saving, onStageDraftChange, onMove, onReactivate }) {

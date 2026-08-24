@@ -25,6 +25,8 @@ The recruiter workbench will provide separate but connected views: **My work**, 
 
 > **Configurable stage-control rule.** When a tenant marks a current pipeline stage as feedback-required, an application cannot leave that stage until a submitted interview-feedback record is linked to the application and that stage. Bulk stage movement performs the same validation for every selected record before any mutation, excludes terminal applications, records a shared bulk-operation correlation identifier in each history/activity record, and emits both per-application and aggregate governance events.
 
+> **Pipeline reporting rule.** The recruiter workbench aggregates current-stage dwell time from the tenant’s durable application stage history. It reports both the record count and the count with a trustworthy recorded stage-entry time; records created before durable history existed deliberately show no average rather than a fabricated duration.
+
 ## Interview and decision operations
 
 Interview plans associate stages with an interview type, duration, timezone, interviewer roles, interview kit, focus competencies, and scorecard. Recruiters can coordinate records and reminders, while a calendar/video provider remains configured-but-inactive until supplied. Feedback is independently authored, has completion visibility, and drives a debrief packet. Offer packages remain internal drafts with version history, approval route, compensation components, and candidate-response record; an accepted handoff is limited to downstream routing metadata.

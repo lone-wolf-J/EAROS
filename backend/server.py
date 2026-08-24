@@ -22,6 +22,7 @@ import secrets
 import time
 import uuid
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -1195,6 +1196,67 @@ async def get_ats_source_performance(user: AppUser = Depends(_current_user)):
         else:
             bucket["active"] += 1
     return {"organization_id": user.organization_id, "sources": sorted(summary.values(), key=lambda item: (-item["applications"], item["source"]))}
+
+
+def _stage_history_timestamp(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+@app.get("/api/ats/analytics/pipeline-time-in-stage")
+async def get_ats_pipeline_time_in_stage(user: AppUser = Depends(_current_user)):
+    """Aggregate the active tenant's current stage dwell time from immutable application history."""
+    _require_role(user, Role.ADMIN, Role.RECRUITER, Role.HIRING_MANAGER)
+    applications = await world.list_applications(user.organization_id, include_archived=True)
+    now = datetime.now(timezone.utc)
+    summary: dict[tuple[Optional[str], str], dict[str, Any]] = {}
+    for application in applications:
+        history = application.stage_history or []
+        matching_entries = [
+            item for item in history
+            if item.get("stage_id") == application.current_stage_id
+            or (not application.current_stage_id and item.get("stage_name") == application.current_stage_name)
+        ]
+        current_entry = matching_entries[-1] if matching_entries else (history[-1] if history else {})
+        entered_at = _stage_history_timestamp(current_entry.get("changed_at"))
+        dwell_seconds = max(0.0, (now - entered_at).total_seconds()) if entered_at else None
+        key = (application.current_stage_id, application.current_stage_name or "Unassigned")
+        bucket = summary.setdefault(key, {
+            "stage_id": application.current_stage_id,
+            "stage_name": application.current_stage_name or "Unassigned",
+            "applications": 0,
+            "active": 0,
+            "hired": 0,
+            "rejected": 0,
+            "withdrawn": 0,
+            "timed_applications": 0,
+            "total_time_in_stage_seconds": 0.0,
+        })
+        bucket["applications"] += 1
+        status = getattr(application.status, "value", application.status)
+        if status in {"active", "hired", "rejected", "withdrawn"}:
+            bucket[status] += 1
+        if dwell_seconds is not None:
+            bucket["timed_applications"] += 1
+            bucket["total_time_in_stage_seconds"] += dwell_seconds
+    stages = []
+    for bucket in summary.values():
+        timed = bucket["timed_applications"]
+        total = bucket.pop("total_time_in_stage_seconds")
+        bucket["average_time_in_stage_hours"] = round(total / timed / 3600, 2) if timed else None
+        stages.append(bucket)
+    return {
+        "organization_id": user.organization_id,
+        "generated_at": utcnow_iso(),
+        "stages": sorted(stages, key=lambda item: (-item["applications"], item["stage_name"])),
+    }
 
 
 class OfferDraftCreateRequest(BaseModel):

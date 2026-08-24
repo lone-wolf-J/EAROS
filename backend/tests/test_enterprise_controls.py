@@ -1,6 +1,7 @@
 """Contract tests for EAROS enterprise compliance controls."""
 import asyncio
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1854,6 +1855,41 @@ def test_bulk_application_stage_move_prevalidates_every_record_and_records_share
             recruiter,
         ))
     assert duplicate.value.status_code == 400
+
+
+def test_pipeline_time_in_stage_reporting_uses_only_tenant_applications_and_handles_legacy_history(monkeypatch):
+    now = datetime.now(timezone.utc)
+    applications = [
+        server.Application(
+            organization_id="org_alpha", application_id="app_timed", candidate_id="cand_one",
+            current_stage_id="stage_interview", current_stage_name="Interview",
+            stage_history=[{"stage_id": "stage_interview", "stage_name": "Interview", "changed_at": (now - timedelta(hours=6)).isoformat()}],
+        ),
+        server.Application(
+            organization_id="org_alpha", application_id="app_legacy", candidate_id="cand_two",
+            current_stage_name="Applied", stage_history=[],
+        ),
+    ]
+    calls = []
+
+    class _World:
+        async def list_applications(self, organization_id, include_archived=False, **_kwargs):
+            calls.append((organization_id, include_archived))
+            return applications if organization_id == "org_alpha" else []
+
+    monkeypatch.setattr(server, "world", _World())
+    user = SimpleNamespace(user_id="recruiter_alpha", organization_id="org_alpha", role=Role.RECRUITER)
+
+    report = asyncio.run(server.get_ats_pipeline_time_in_stage(user))
+
+    assert calls == [("org_alpha", True)]
+    assert report["organization_id"] == "org_alpha"
+    by_stage = {item["stage_name"]: item for item in report["stages"]}
+    assert by_stage["Interview"]["applications"] == 1
+    assert by_stage["Interview"]["timed_applications"] == 1
+    assert 5.9 <= by_stage["Interview"]["average_time_in_stage_hours"] <= 6.1
+    assert by_stage["Applied"]["timed_applications"] == 0
+    assert by_stage["Applied"]["average_time_in_stage_hours"] is None
 
 
 def test_operational_requisition_request_preserves_complete_hiring_plan_fields():
