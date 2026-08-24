@@ -159,6 +159,10 @@ export default function ATSOperations() {
   const [selectedActivityCandidateId, setSelectedActivityCandidateId] = useState("");
   const [selectedDistributionRequisitionId, setSelectedDistributionRequisitionId] = useState("");
   const [stageDrafts, setStageDrafts] = useState({});
+  const [applicationQuery, setApplicationQuery] = useState("");
+  const [applicationRequisitionFilter, setApplicationRequisitionFilter] = useState("");
+  const [applicationStageFilter, setApplicationStageFilter] = useState("");
+  const [applicationSourceFilter, setApplicationSourceFilter] = useState("");
   const { data: requisitions = [], mutate: mutateRequisitions } = useSWR("/ats/requisitions", fetcher);
   const { data: pipelines = [] } = useSWR("/ats/pipelines", fetcher);
   const { data: applications = [], mutate: mutateApplications } = useSWR("/ats/applications", fetcher);
@@ -187,6 +191,11 @@ export default function ATSOperations() {
   const candidateById = useMemo(() => new Map(candidates.map((candidate) => [candidate.candidate_id, candidate])), [candidates]);
   const requisitionById = useMemo(() => new Map(requisitions.map((requisition) => [requisition.requisition_id, requisition])), [requisitions]);
   const pipelineById = useMemo(() => new Map(pipelines.map((pipeline) => [pipeline.pipeline_id, pipeline])), [pipelines]);
+  const filteredApplications = useMemo(() => applications.filter((application) => {
+    const candidate = candidateById.get(application.candidate_id);
+    const matchesQuery = !applicationQuery.trim() || `${candidate?.full_name || ""} ${candidate?.email || ""} ${application.current_stage_name || ""}`.toLowerCase().includes(applicationQuery.trim().toLowerCase());
+    return matchesQuery && (!applicationRequisitionFilter || application.requisition_id === applicationRequisitionFilter) && (!applicationStageFilter || application.current_stage_name === applicationStageFilter) && (!applicationSourceFilter || application.source === applicationSourceFilter);
+  }), [applications, candidateById, applicationQuery, applicationRequisitionFilter, applicationStageFilter, applicationSourceFilter]);
 
   const refreshAll = () => Promise.all([mutateRequisitions(), mutateApplications(), mutatePools(), mutateInterviews(), mutateCandidates(), mutateCrmCandidates(), mutateCandidateTags(), mutateScorecards(), mutateInterviewFeedback(), mutateCandidateActivity(), mutateCandidateMentions(), mutateCandidateCommunications(), mutateCandidateNotificationDeliveries(), mutateHiringDecisions(), mutateOffers(), mutateHandoffs()]);
   const create = async (path, body, mutate) => {
@@ -380,14 +389,14 @@ export default function ATSOperations() {
               {tab === "candidates" && <CandidateCRMWorkspace candidates={crmCandidates} tags={candidateTags} pools={pools} query={crmQuery} setQuery={setCrmQuery} selectedCandidateIds={selectedCandidateIds} setSelectedCandidateIds={setSelectedCandidateIds} bulkAction={bulkAction} setBulkAction={setBulkAction} bulkTags={bulkTags} setBulkTags={setBulkTags} bulkSource={bulkSource} setBulkSource={setBulkSource} bulkPoolId={bulkPoolId} setBulkPoolId={setBulkPoolId} saving={saving} onRunBulkAction={runBulkAction} onViewActivity={(candidateId) => { setSelectedActivityCandidateId(candidateId); setTab("collaboration"); }} />}
 
               {tab === "applications" && (applications.length ? (
-                <div className="grid gap-3 lg:grid-cols-2">
-                  {applications.map((application) => {
+                <div className="space-y-3"><div className="grid gap-2 rounded-sm border border-slate-800 bg-slate-950/40 p-3 md:grid-cols-4"><input value={applicationQuery} onChange={(event) => setApplicationQuery(event.target.value)} className={inputClass} placeholder="Search candidate or stage" /><select value={applicationRequisitionFilter} onChange={(event) => setApplicationRequisitionFilter(event.target.value)} className={inputClass}><option value="">All requisitions</option>{requisitions.map((requisition) => <option key={requisition.requisition_id} value={requisition.requisition_id}>{requisition.title}</option>)}</select><select value={applicationStageFilter} onChange={(event) => setApplicationStageFilter(event.target.value)} className={inputClass}><option value="">All stages</option>{[...new Set(applications.map((item) => item.current_stage_name))].map((stage) => <option key={stage} value={stage}>{stage}</option>)}</select><select value={applicationSourceFilter} onChange={(event) => setApplicationSourceFilter(event.target.value)} className={inputClass}><option value="">All sources</option>{[...new Set(applications.map((item) => item.source))].map((source) => <option key={source} value={source}>{source}</option>)}</select></div><div className="flex items-center justify-between px-1 font-mono2 text-[10px] tracking-wider text-slate-500"><span>RECRUITER WORK QUEUE</span><span>{filteredApplications.length} of {applications.length} applications</span></div><div className="grid gap-3 lg:grid-cols-2">
+                  {filteredApplications.map((application) => {
                     const candidate = candidateById.get(application.candidate_id);
                     const stages = applicationStages(application);
                     const stageValue = stageDrafts[application.application_id] || "";
                     return <div key={application.application_id} className="rounded-sm border border-slate-800 bg-slate-950/40 p-4"><div className="flex items-start justify-between gap-3"><div><div className="font-semibold text-slate-100">{candidate?.full_name || application.candidate_id}</div><div className="mt-1 text-xs text-slate-500">{requisitionById.get(application.requisition_id)?.title || "Unattached prospect"}</div></div><Status value={application.status} /></div><div className="mt-4 flex items-center gap-2 text-sm text-teal-300"><CheckCircle2 className="h-4 w-4" /> {application.current_stage_name}<ArrowRight className="ml-auto h-4 w-4 text-slate-600" /></div><div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]"><select aria-label={`Move ${candidate?.full_name || application.application_id} to stage`} value={stageValue} onChange={(event) => setStageDrafts((current) => ({ ...current, [application.application_id]: event.target.value }))} className={inputClass}><option value="">Move to active stage…</option>{stages.filter((stage) => stage.name !== application.current_stage_name).map((stage) => <option key={stage.stage_id} value={stage.stage_id}>{stage.name}</option>)}</select><button type="button" disabled={saving || !stageValue} onClick={() => moveApplicationStage(application)} className="rounded-sm border border-teal-400/40 bg-teal-400/10 px-3 py-2 text-xs font-bold text-teal-100 transition hover:bg-teal-400/20 disabled:cursor-not-allowed disabled:opacity-40">Move stage</button></div><div className="mt-3 font-mono2 text-[10px] text-slate-500">SOURCE · {application.source} · {formatDate(application.applied_at)} · Final hire/reject remains approval-gated</div></div>;
                   })}
-                </div>
+                </div>{!filteredApplications.length && <EmptyState title="No matching applications" detail="Adjust the work-queue filters or clear the search to review the active tenant pipeline." />}</div>
               ) : <EmptyState title="No applications yet" detail="Create an application to connect a candidate to a requisition and preserve stage history, source attribution, score outputs, and audit context." onCreate={() => setModal("application")} />)}
 
               {tab === "pools" && (pools.length ? (
