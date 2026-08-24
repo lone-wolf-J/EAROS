@@ -1992,6 +1992,92 @@ def test_requisition_operational_edit_blocks_pipeline_replacement_after_applicat
     assert "Pipeline cannot change after applications" in exc.value.detail
 
 
+def test_interview_debrief_requires_linked_feedback_and_preserves_application_state(monkeypatch):
+    calls = []
+    application = server.Application(
+        organization_id="org_alpha", application_id="app_alpha", candidate_id="cand_alpha",
+        current_stage_id="stage_interview", current_stage_name="Interview",
+    )
+    interview = server.Interview(
+        organization_id="org_alpha", interview_id="int_alpha", application_id="app_alpha",
+        candidate_id="cand_alpha", scheduled_at="2026-09-01T10:00:00+00:00",
+    )
+    feedback = server.InterviewFeedback(
+        organization_id="org_alpha", feedback_id="feedback_alpha", interview_id="int_alpha",
+        interviewer_id="interviewer_alpha", recommendation="yes",
+    )
+
+    class _World:
+        async def get_application(self, organization_id, application_id):
+            return application if (organization_id, application_id) == ("org_alpha", "app_alpha") else None
+
+        async def get_interview(self, organization_id, interview_id):
+            return interview if (organization_id, interview_id) == ("org_alpha", "int_alpha") else None
+
+        async def list_interview_feedback(self, organization_id, interview_id):
+            return [feedback] if (organization_id, interview_id) == ("org_alpha", "int_alpha") else []
+
+        async def record_interview_debrief(self, debrief):
+            calls.append(("debrief", debrief.application_id, debrief.feedback_ids, debrief.recommendation))
+            return debrief
+
+        async def record_activity(self, activity):
+            calls.append(("activity", activity.event_type, activity.entity_id, activity.correlation_id))
+            return activity
+
+    class _Governance:
+        async def emit(self, event):
+            calls.append(("event", event.event_type.value, event.payload["feedback_count"], event.correlation_id))
+            return event
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    monkeypatch.setattr(server, "db", SimpleNamespace(users=SimpleNamespace(find_one=None)))
+    manager = SimpleNamespace(user_id="manager_alpha", organization_id="org_alpha", role=Role.HIRING_MANAGER)
+
+    created = asyncio.run(server.create_ats_interview_debrief(
+        "app_alpha",
+        server.InterviewDebriefCreateRequest(
+            interview_ids=["int_alpha"], feedback_ids=["feedback_alpha"], recommendation="advance",
+            evidence_summary="The panel cited consistent role-relevant technical and collaboration evidence.",
+        ),
+        manager,
+    ))
+
+    assert created["application_id"] == "app_alpha"
+    assert created["feedback_ids"] == ["feedback_alpha"]
+    assert application.status == ApplicationStatus.ACTIVE
+    assert application.current_stage_name == "Interview"
+    assert any(call[0] == "event" and call[1] == "world.interview_debrief.recorded" for call in calls)
+    assert any(call[0] == "activity" and call[1] == "interview.debrief_recorded" for call in calls)
+
+    with pytest.raises(HTTPException) as mismatched_feedback:
+        asyncio.run(server.create_ats_interview_debrief(
+            "app_alpha",
+            server.InterviewDebriefCreateRequest(
+                interview_ids=["int_alpha"], feedback_ids=["feedback_foreign"],
+                evidence_summary="The panel considered the submitted evidence before recording this synthesis.",
+            ),
+            manager,
+        ))
+    assert mismatched_feedback.value.status_code == 400
+
+    class _NoFeedbackWorld(_World):
+        async def list_interview_feedback(self, *_args):
+            return []
+
+    monkeypatch.setattr(server, "world", _NoFeedbackWorld())
+    with pytest.raises(HTTPException) as no_feedback:
+        asyncio.run(server.create_ats_interview_debrief(
+            "app_alpha",
+            server.InterviewDebriefCreateRequest(
+                interview_ids=["int_alpha"], evidence_summary="The panel requested further evidence before reaching a synthesis.",
+            ),
+            manager,
+        ))
+    assert no_feedback.value.status_code == 409
+
+
 def test_operational_requisition_request_preserves_complete_hiring_plan_fields():
     request = server.RequisitionCreateRequest(
         title="Senior Product Designer",

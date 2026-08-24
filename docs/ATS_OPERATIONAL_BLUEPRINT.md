@@ -29,6 +29,8 @@ The recruiter workbench will provide separate but connected views: **My work**, 
 
 > **Pipeline reporting rule.** The recruiter workbench aggregates current-stage dwell time from the tenant’s durable application stage history. It reports both the record count and the count with a trustworthy recorded stage-entry time; records created before durable history existed deliberately show no average rather than a fabricated duration.
 
+> **Interview debrief rule.** A recruiter, administrator, or hiring manager may record a panel debrief only against tenant-scoped interviews and submitted feedback belonging to one application. The immutable synthesis captures its evidence set, participant references, facilitator, recommendation, and unresolved questions, but it cannot move a stage or change a final outcome. Hiring or rejection remains a separate independently approved decision.
+
 ## Interview and decision operations
 
 Interview plans associate stages with an interview type, duration, timezone, interviewer roles, interview kit, focus competencies, and scorecard. Recruiters can coordinate records and reminders, while a calendar/video provider remains configured-but-inactive until supplied. Feedback is independently authored, has completion visibility, and drives a debrief packet. Offer packages remain internal drafts with version history, approval route, compensation components, and candidate-response record; an accepted handoff is limited to downstream routing metadata.

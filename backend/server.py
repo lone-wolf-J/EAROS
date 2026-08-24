@@ -109,6 +109,7 @@ from platform_core.world import (
     DispositionReason,
     HiringDecision,
     Interview,
+    InterviewDebrief,
     InterviewFeedback,
     NotificationPreference,
     Offer,
@@ -2282,6 +2283,15 @@ class InterviewFeedbackCreateRequest(BaseModel):
     summary: Optional[str] = Field(default=None, max_length=10000)
 
 
+class InterviewDebriefCreateRequest(BaseModel):
+    interview_ids: list[str] = Field(min_length=1, max_length=50)
+    feedback_ids: list[str] = Field(default_factory=list, max_length=500)
+    participant_user_ids: list[str] = Field(default_factory=list, max_length=50)
+    recommendation: str = Field(default="no_decision", pattern="^(advance|hold|decline|no_decision)$")
+    evidence_summary: str = Field(min_length=10, max_length=20_000)
+    unresolved_questions: list[str] = Field(default_factory=list, max_length=100)
+
+
 class CollaborationMentionCreateRequest(BaseModel):
     mentioned_user_id: str = Field(min_length=3, max_length=200)
     feedback_id: Optional[str] = Field(default=None, max_length=200)
@@ -2361,6 +2371,91 @@ async def create_ats_interview_feedback(
         },
     ))
     return feedback.model_dump()
+
+
+@app.get("/api/ats/applications/{application_id}/interview-debriefs")
+async def list_ats_interview_debriefs(application_id: str, user: AppUser = Depends(_current_user)):
+    _require_role(user, Role.ADMIN, Role.RECRUITER, Role.HIRING_MANAGER)
+    await _scoped_application(application_id, user)
+    return [debrief.model_dump() for debrief in await world.list_interview_debriefs(user.organization_id, application_id)]
+
+
+@app.post("/api/ats/applications/{application_id}/interview-debriefs", status_code=201)
+async def create_ats_interview_debrief(
+    application_id: str, req: InterviewDebriefCreateRequest, user: AppUser = Depends(_current_user)
+):
+    """Record a human-facilitated panel synthesis; final hiring outcomes remain separately approval-gated."""
+    _require_role(user, Role.ADMIN, Role.RECRUITER, Role.HIRING_MANAGER)
+    application = await _scoped_application(application_id, user)
+    interview_ids = list(dict.fromkeys(req.interview_ids))
+    if len(interview_ids) != len(req.interview_ids):
+        raise HTTPException(status_code=400, detail="Interview identifiers must be unique within a debrief")
+    feedback_by_id: dict[str, InterviewFeedback] = {}
+    for interview_id in interview_ids:
+        interview = await world.get_interview(user.organization_id, interview_id)
+        if not interview:
+            raise HTTPException(status_code=404, detail="Interview not found")
+        if interview.application_id != application.application_id or interview.candidate_id != application.candidate_id:
+            raise HTTPException(status_code=400, detail="Every debrief interview must belong to the selected application")
+        for feedback in await world.list_interview_feedback(user.organization_id, interview_id):
+            feedback_by_id[feedback.feedback_id] = feedback
+    feedback_ids = list(dict.fromkeys(req.feedback_ids)) if req.feedback_ids else list(feedback_by_id)
+    if not feedback_ids:
+        raise HTTPException(status_code=409, detail="A debrief requires at least one submitted interview feedback record")
+    if len(feedback_ids) != len(req.feedback_ids) and req.feedback_ids:
+        raise HTTPException(status_code=400, detail="Feedback identifiers must be unique within a debrief")
+    if any(feedback_id not in feedback_by_id for feedback_id in feedback_ids):
+        raise HTTPException(status_code=400, detail="Debrief feedback must belong to a selected interview")
+    participant_user_ids = list(dict.fromkeys(req.participant_user_ids))
+    for participant_user_id in participant_user_ids:
+        participant = await db.users.find_one(
+            {"user_id": participant_user_id, "organization_id": user.organization_id}, {"_id": 0}
+        )
+        if not participant:
+            raise HTTPException(status_code=404, detail="Debrief participant not found in this organization")
+    debrief = await world.record_interview_debrief(InterviewDebrief(
+        organization_id=user.organization_id,
+        application_id=application.application_id,
+        candidate_id=application.candidate_id,
+        interview_ids=interview_ids,
+        feedback_ids=feedback_ids,
+        participant_user_ids=participant_user_ids,
+        facilitator_user_id=user.user_id,
+        recommendation=req.recommendation,
+        evidence_summary=req.evidence_summary,
+        unresolved_questions=req.unresolved_questions,
+    ))
+    await governance.emit(DomainEvent(
+        event_type=EventType.INTERVIEW_DEBRIEF_RECORDED,
+        actor=f"user:{user.user_id}",
+        subject_type="interview_debrief",
+        subject_id=debrief.interview_debrief_id,
+        organization_id=user.organization_id,
+        payload={
+            "application_id": application.application_id,
+            "candidate_id": application.candidate_id,
+            "interview_count": len(interview_ids),
+            "feedback_count": len(feedback_ids),
+            "recommendation": debrief.recommendation,
+        },
+        correlation_id=debrief.interview_debrief_id,
+    ))
+    await world.record_activity(ActivityRecord(
+        organization_id=user.organization_id,
+        entity_type="candidate",
+        entity_id=application.candidate_id,
+        event_type="interview.debrief_recorded",
+        actor_user_id=user.user_id,
+        payload={
+            "interview_debrief_id": debrief.interview_debrief_id,
+            "application_id": application.application_id,
+            "interview_ids": interview_ids,
+            "feedback_ids": feedback_ids,
+            "recommendation": debrief.recommendation,
+        },
+        correlation_id=debrief.interview_debrief_id,
+    ))
+    return debrief.model_dump()
 
 
 @app.get("/api/ats/candidates/{candidate_id}/collaboration/mentions")

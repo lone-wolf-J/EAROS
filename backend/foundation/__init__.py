@@ -35,6 +35,7 @@ def new_resume_id() -> str: return _new_id("resume")
 def new_interview_id() -> str: return _new_id("interview")
 def new_scorecard_id() -> str: return _new_id("scorecard")
 def new_feedback_id() -> str: return _new_id("feedback")
+def new_interview_debrief_id() -> str: return _new_id("debrief")
 def new_activity_id() -> str: return _new_id("activity")
 def new_mention_id() -> str: return _new_id("mention")
 def new_communication_id() -> str: return _new_id("comm")
@@ -229,6 +230,7 @@ class EventType(str, Enum):
     REQUISITION_PUBLICATION_UPDATED = "world.requisition.publication_updated"
     INTERVIEW_SCHEDULED = "world.interview.scheduled"
     SCORECARD_SUBMITTED = "world.scorecard.submitted"
+    INTERVIEW_DEBRIEF_RECORDED = "world.interview_debrief.recorded"
     COLLABORATION_MENTION_CREATED = "world.collaboration_mention.created"
     CANDIDATE_COMMUNICATION_RECORDED = "world.candidate_communication.recorded"
     HIRING_DECISION_REQUESTED = "world.hiring_decision.requested"

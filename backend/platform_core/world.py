@@ -39,6 +39,7 @@ from foundation import (
     new_department_id,
     new_disposition_reason_id,
     new_feedback_id,
+    new_interview_debrief_id,
     new_hiring_decision_id,
     new_interview_id,
     new_job_id,
@@ -483,6 +484,23 @@ class InterviewFeedback(BaseModel):
     concerns: list[str] = Field(default_factory=list)
     summary: Optional[str] = None
     submitted_at: str = Field(default_factory=utcnow_iso)
+
+
+class InterviewDebrief(BaseModel):
+    """Immutable, evidence-linked panel synthesis; it never changes application disposition or stage."""
+    model_config = ConfigDict(extra="ignore")
+    interview_debrief_id: str = Field(default_factory=new_interview_debrief_id)
+    organization_id: str
+    application_id: str
+    candidate_id: str
+    interview_ids: list[str] = Field(min_length=1, max_length=50)
+    feedback_ids: list[str] = Field(min_length=1, max_length=500)
+    participant_user_ids: list[str] = Field(default_factory=list, max_length=50)
+    facilitator_user_id: str
+    recommendation: str = "no_decision"  # advance | hold | decline | no_decision; never a final disposition
+    evidence_summary: str = Field(min_length=10, max_length=20_000)
+    unresolved_questions: list[str] = Field(default_factory=list, max_length=100)
+    created_at: str = Field(default_factory=utcnow_iso)
 
 
 class CollaborationMention(BaseModel):
@@ -1424,6 +1442,16 @@ class WorldState:
             {"organization_id": organization_id, "interview_id": interview_id}, {"_id": 0}
         ).sort("submitted_at", -1).to_list(1000)
         return [InterviewFeedback(**doc) for doc in docs]
+
+    async def record_interview_debrief(self, debrief: InterviewDebrief) -> InterviewDebrief:
+        await self.db.interview_debriefs.insert_one(debrief.model_dump())
+        return debrief
+
+    async def list_interview_debriefs(self, organization_id: str, application_id: str) -> list[InterviewDebrief]:
+        docs = await self.db.interview_debriefs.find(
+            {"organization_id": organization_id, "application_id": application_id}, {"_id": 0}
+        ).sort("created_at", -1).to_list(500)
+        return [InterviewDebrief(**doc) for doc in docs]
 
     async def record_collaboration_mention(self, mention: CollaborationMention) -> CollaborationMention:
         await self.db.collaboration_mentions.insert_one(mention.model_dump())
