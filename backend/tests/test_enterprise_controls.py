@@ -425,6 +425,271 @@ def test_hiring_decision_grant_rejects_a_stale_application_without_deciding_or_e
     assert not any(call[0] == "decide" for call in calls)
 
 
+def test_application_reactivation_request_is_tenant_scoped_and_preserves_the_terminal_outcome(monkeypatch):
+    calls = []
+    application = SimpleNamespace(
+        application_id="app_terminal",
+        candidate_id="cand_alpha",
+        requisition_id="req_alpha",
+        pipeline_id=None,
+        status=ApplicationStatus.REJECTED,
+    )
+
+    class _World:
+        async def get_application(self, organization_id, application_id):
+            calls.append(("application", organization_id, application_id))
+            return application if (organization_id, application_id) == ("org_alpha", "app_terminal") else None
+
+        async def list_application_reactivation_requests(self, organization_id, **kwargs):
+            calls.append(("list", organization_id, kwargs))
+            return []
+
+        async def create_application_reactivation_request(self, request):
+            calls.append(("create", request.organization_id, request.application_id, request.terminal_status))
+            return request
+
+        async def record_activity(self, activity):
+            calls.append(("activity", activity.organization_id, activity.entity_id, activity.event_type))
+            return activity
+
+    class _Governance:
+        async def request_approval(self, approval):
+            calls.append(("approval", approval.organization_id, approval.subject_type, approval.subject_id))
+            return approval
+
+        async def emit(self, event):
+            calls.append(("event", event.organization_id, event.event_type.value))
+            return event
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    user = SimpleNamespace(user_id="usr_recruiter", organization_id="org_alpha", role=Role.RECRUITER)
+
+    result = asyncio.run(server.request_ats_application_reactivation(
+        "app_terminal",
+        server.ApplicationReactivationCreateRequest(
+            target_stage_name="Screened",
+            rationale="A verified process correction requires the candidate to return to active review.",
+        ),
+        user,
+    ))
+
+    assert result["status"] == "awaiting_approval"
+    assert result["terminal_status"] == "rejected"
+    assert result["approval"]["organization_id"] == "org_alpha"
+    assert result["approval"]["subject_type"] == "application_reactivation_request"
+    assert ("create", "org_alpha", "app_terminal", "rejected") in calls
+    assert ("activity", "org_alpha", "app_terminal", "application.reactivation_requested") in calls
+    assert application.status is ApplicationStatus.REJECTED
+
+
+def test_application_reactivation_rejects_invalid_stage_before_creating_governance_work(monkeypatch):
+    calls = []
+    application = SimpleNamespace(
+        application_id="app_terminal", candidate_id="cand_alpha", requisition_id=None,
+        pipeline_id=None, status=ApplicationStatus.HIRED,
+    )
+
+    class _World:
+        async def get_application(self, organization_id, application_id):
+            return application
+
+        async def list_application_reactivation_requests(self, *_args, **_kwargs):
+            return []
+
+        async def create_application_reactivation_request(self, *_args):
+            calls.append("create")
+
+    class _Governance:
+        async def request_approval(self, *_args):
+            calls.append("approval")
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    user = SimpleNamespace(user_id="usr_recruiter", organization_id="org_alpha", role=Role.RECRUITER)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(server.request_ats_application_reactivation(
+            "app_terminal",
+            server.ApplicationReactivationCreateRequest(
+                target_stage_name="Hired",
+                rationale="A process correction requires a clearly active return stage.",
+            ),
+            user,
+        ))
+
+    assert exc.value.status_code == 400
+    assert calls == []
+
+
+def test_application_reactivation_requires_independent_approval_then_appends_immutable_history(monkeypatch):
+    calls = []
+    reactivation = SimpleNamespace(
+        application_reactivation_request_id="appreact_alpha",
+        approval_id="apr_reactivate",
+        application_id="app_terminal",
+        candidate_id="cand_alpha",
+        terminal_status="rejected",
+        target_stage_id="stage_screened",
+        target_stage_name="Screened",
+        status="awaiting_approval",
+        model_dump=lambda: {
+            "application_reactivation_request_id": "appreact_alpha",
+            "status": reactivation.status,
+        },
+    )
+    approval = SimpleNamespace(
+        approval_id="apr_reactivate",
+        subject_type="application_reactivation_request",
+        subject_id="appreact_alpha",
+        requested_by="usr_recruiter",
+        context={"application_reactivation_request_id": "appreact_alpha"},
+        status="pending",
+        model_dump=lambda: {"approval_id": "apr_reactivate", "status": approval.status},
+    )
+    terminal_application = SimpleNamespace(
+        application_id="app_terminal", pipeline_id=None, status=ApplicationStatus.REJECTED,
+    )
+    reactivated_application = SimpleNamespace(
+        status=ApplicationStatus.ACTIVE,
+        current_stage_name="Screened",
+        stage_history=[{
+            "reason": "approved_application_reactivation",
+            "application_reactivation_request_id": "appreact_alpha",
+            "approval_id": "apr_reactivate",
+        }],
+    )
+
+    class _World:
+        async def get_application_reactivation_request(self, organization_id, request_id):
+            calls.append(("request", organization_id, request_id))
+            return reactivation if (organization_id, request_id) == ("org_alpha", "appreact_alpha") else None
+
+        async def get_application(self, organization_id, application_id):
+            calls.append(("application", organization_id, application_id))
+            return terminal_application if (organization_id, application_id) == ("org_alpha", "app_terminal") else None
+
+        async def apply_application_reactivation(self, organization_id, request, **kwargs):
+            calls.append(("apply", organization_id, request.application_id, kwargs["approval_id"], kwargs["resolved_by_user_id"]))
+            terminal_application.status = ApplicationStatus.ACTIVE
+            return reactivated_application
+
+        async def resolve_application_reactivation_request(self, organization_id, request_id, **kwargs):
+            calls.append(("resolve", organization_id, request_id, kwargs["status"], kwargs["resolved_by_user_id"]))
+            reactivation.status = kwargs["status"]
+            return reactivation
+
+        async def record_activity(self, activity):
+            calls.append(("activity", activity.organization_id, activity.entity_id, activity.event_type))
+            return activity
+
+    class _Governance:
+        async def list_approvals(self, organization_id):
+            calls.append(("list", organization_id))
+            return [approval] if organization_id == "org_alpha" else []
+
+        async def decide_approval(self, approval_id, outcome, decided_by, note):
+            calls.append(("decide", approval_id, outcome, decided_by))
+            approval.status = outcome
+            return approval
+
+        async def emit(self, event):
+            calls.append(("event", event.organization_id, event.event_type.value))
+            return event
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    requester = SimpleNamespace(user_id="usr_recruiter", organization_id="org_alpha", role=Role.RECRUITER)
+    independent_admin = SimpleNamespace(user_id="usr_admin", organization_id="org_alpha", role=Role.ADMIN)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(server.decide_approval(
+            "apr_reactivate", server.DecideApprovalRequest(decision="granted"), requester
+        ))
+    assert exc.value.status_code == 403
+    assert not any(call[0] == "decide" for call in calls)
+
+    result = asyncio.run(server.decide_approval(
+        "apr_reactivate", server.DecideApprovalRequest(decision="granted", note="Independent operational correction approved."), independent_admin
+    ))
+
+    assert result["application_reactivation_request"] == {
+        "application_reactivation_request_id": "appreact_alpha", "status": "effective"
+    }
+    assert ("apply", "org_alpha", "app_terminal", "apr_reactivate", "usr_admin") in calls
+    assert ("activity", "org_alpha", "app_terminal", "application.reactivation_effective") in calls
+    assert reactivated_application.stage_history[-1]["reason"] == "approved_application_reactivation"
+    assert reactivated_application.stage_history[-1]["approval_id"] == "apr_reactivate"
+
+
+def test_application_reactivation_denial_keeps_terminal_application_unchanged_and_tenant_scope_blocks_lookup(monkeypatch):
+    calls = []
+    reactivation = SimpleNamespace(
+        application_reactivation_request_id="appreact_denied",
+        approval_id="apr_reactivate_denied",
+        application_id="app_terminal",
+        candidate_id="cand_alpha",
+        terminal_status="hired",
+        target_stage_id=None,
+        target_stage_name="Applied",
+        status="awaiting_approval",
+        model_dump=lambda: {
+            "application_reactivation_request_id": "appreact_denied", "status": reactivation.status,
+        },
+    )
+    approval = SimpleNamespace(
+        approval_id="apr_reactivate_denied", subject_type="application_reactivation_request",
+        subject_id="appreact_denied", requested_by="usr_recruiter", context={}, status="pending",
+        model_dump=lambda: {"approval_id": "apr_reactivate_denied", "status": approval.status},
+    )
+
+    class _World:
+        async def get_application_reactivation_request(self, organization_id, request_id):
+            return reactivation if organization_id == "org_alpha" and request_id == "appreact_denied" else None
+
+        async def apply_application_reactivation(self, *_args, **_kwargs):
+            calls.append("apply")
+
+        async def resolve_application_reactivation_request(self, _organization_id, _request_id, **kwargs):
+            reactivation.status = kwargs["status"]
+            return reactivation
+
+        async def record_activity(self, activity):
+            calls.append(("activity", activity.event_type))
+            return activity
+
+    class _Governance:
+        async def list_approvals(self, organization_id):
+            return [approval] if organization_id == "org_alpha" else []
+
+        async def decide_approval(self, *_args):
+            approval.status = "denied"
+            return approval
+
+        async def emit(self, event):
+            calls.append(("event", event.event_type.value))
+            return event
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    admin = SimpleNamespace(user_id="usr_admin", organization_id="org_alpha", role=Role.ADMIN)
+    other_tenant_admin = SimpleNamespace(user_id="usr_other", organization_id="org_beta", role=Role.ADMIN)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(server.decide_approval(
+            "apr_reactivate_denied", server.DecideApprovalRequest(decision="denied"), other_tenant_admin
+        ))
+    assert exc.value.status_code == 404
+
+    result = asyncio.run(server.decide_approval(
+        "apr_reactivate_denied", server.DecideApprovalRequest(decision="denied"), admin
+    ))
+
+    assert result["application_reactivation_request"]["status"] == "denied"
+    assert "apply" not in calls
+    assert ("activity", "application.reactivation_denied") in calls
+
+
 @pytest.mark.parametrize(
     ("requested_action", "status", "expected_capability"),
     [

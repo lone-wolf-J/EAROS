@@ -453,6 +453,8 @@ def test_persistence_backed_core_recruiting_lifecycle_remains_tenant_scoped_and_
     assert resolved.status == "effective"
     assert resolved.resolved_by_user_id == "usr_admin"
     assert applied and applied.status is ApplicationStatus.HIRED
+    assert applied.current_stage_name == "Hired"
+    assert applied.current_stage_id is None
     assert applied.stage_history[-1]["reason"] == "approved_hiring_decision"
     assert len(database.interview_feedback.docs) == 1
     assert len(database.offers.docs) == 1

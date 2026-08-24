@@ -95,6 +95,7 @@ from platform_core.runtime import ExecutionRecord, PlanStep, Runtime
 from platform_core.world import (
     ActivityRecord,
     Application,
+    ApplicationReactivationRequest,
     AuditExportManifest,
     Candidate,
     CandidateNotificationDelivery,
@@ -1531,6 +1532,12 @@ class ApplicationStageRequest(BaseModel):
     reason: Optional[str] = Field(default=None, max_length=1000)
 
 
+class ApplicationReactivationCreateRequest(BaseModel):
+    target_stage_id: Optional[str] = None
+    target_stage_name: str = Field(min_length=1, max_length=120)
+    rationale: str = Field(min_length=10, max_length=10_000)
+
+
 _FALLBACK_ACTIVE_APPLICATION_STAGES = frozenset({"Applied", "Screened", "Interview", "Offer"})
 _TERMINAL_APPLICATION_STAGE_NAMES = frozenset({"Hired", "Rejected"})
 
@@ -1568,6 +1575,32 @@ async def _validate_application_stage_transition(application: Application, req: 
             status_code=409,
             detail="Terminal pipeline stages require an approval-gated hiring decision",
         )
+
+
+async def _validate_application_reactivation_target(
+    application: Application, stage_id: Optional[str], stage_name: str
+) -> None:
+    """Validate the active stage selected for a governed return from a terminal outcome."""
+    if stage_name in _TERMINAL_APPLICATION_STAGE_NAMES:
+        raise HTTPException(status_code=400, detail="A reactivated application must return to an active pipeline stage")
+    if not application.pipeline_id:
+        if stage_name not in _FALLBACK_ACTIVE_APPLICATION_STAGES:
+            raise HTTPException(status_code=400, detail="Reactivation stage is not part of the canonical active pipeline")
+        return
+    pipeline = await world.get_pipeline(application.organization_id, application.pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=409, detail="Application pipeline is unavailable")
+    matches = [
+        stage for stage in pipeline.stages
+        if (stage_id and stage.stage_id == stage_id) or (not stage_id and stage.name == stage_name)
+    ]
+    if len(matches) != 1:
+        raise HTTPException(status_code=400, detail="Reactivation stage is not configured for this pipeline")
+    stage = matches[0]
+    if stage.name != stage_name:
+        raise HTTPException(status_code=400, detail="Reactivation stage identifier and name do not match")
+    if stage.category.startswith("terminal_"):
+        raise HTTPException(status_code=400, detail="A reactivated application must return to an active pipeline stage")
 
 
 @app.post("/api/ats/applications/{application_id}/stage")
@@ -1613,6 +1646,104 @@ async def move_ats_application_stage(
         entity_type="application", entity_id=application.application_id, actor_user_id=user.user_id,
     )
     return application.model_dump()
+
+
+@app.get("/api/ats/applications/{application_id}/reactivation-requests")
+async def list_ats_application_reactivation_requests(
+    application_id: str, user: AppUser = Depends(_current_user)
+):
+    _require_role(user, Role.ADMIN, Role.RECRUITER, Role.HIRING_MANAGER)
+    await _scoped_application(application_id, user)
+    return [request.model_dump() for request in await world.list_application_reactivation_requests(
+        user.organization_id, application_id=application_id
+    )]
+
+
+@app.post("/api/ats/applications/{application_id}/reactivation-requests", status_code=201)
+async def request_ats_application_reactivation(
+    application_id: str,
+    req: ApplicationReactivationCreateRequest,
+    user: AppUser = Depends(_current_user),
+):
+    """Queue a separately approved correction for a terminal hired/rejected outcome."""
+    _require_role(user, Role.ADMIN, Role.RECRUITER, Role.HIRING_MANAGER)
+    application = await _scoped_application(application_id, user)
+    application_status = getattr(application.status, "value", application.status)
+    if application_status not in {ApplicationStatus.HIRED.value, ApplicationStatus.REJECTED.value}:
+        raise HTTPException(
+            status_code=409,
+            detail="Only independently approved Hired or Rejected applications can be reactivated",
+        )
+    existing = await world.list_application_reactivation_requests(
+        user.organization_id, application_id=application.application_id, status="awaiting_approval"
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail="A reactivation request is already awaiting approval for this application")
+    await _validate_application_reactivation_target(application, req.target_stage_id, req.target_stage_name)
+    reactivation = ApplicationReactivationRequest(
+        organization_id=user.organization_id,
+        application_id=application.application_id,
+        candidate_id=application.candidate_id,
+        requisition_id=application.requisition_id,
+        terminal_status=application_status,
+        target_stage_id=req.target_stage_id,
+        target_stage_name=req.target_stage_name,
+        rationale=req.rationale,
+        requested_by_user_id=user.user_id,
+    )
+    approval = Approval(
+        organization_id=user.organization_id,
+        subject_type="application_reactivation_request",
+        subject_id=reactivation.application_reactivation_request_id,
+        requested_by=user.user_id,
+        reason=f"Approve reactivation of terminal application {application.application_id} to {req.target_stage_name}",
+        context={
+            "application_reactivation_request_id": reactivation.application_reactivation_request_id,
+            "application_id": application.application_id,
+            "candidate_id": application.candidate_id,
+            "terminal_status": application_status,
+            "target_stage_id": req.target_stage_id,
+            "target_stage_name": req.target_stage_name,
+            "correlation_id": reactivation.application_reactivation_request_id,
+        },
+    )
+    reactivation.approval_id = approval.approval_id
+    await world.create_application_reactivation_request(reactivation)
+    await governance.request_approval(approval)
+    await governance.emit(DomainEvent(
+        event_type=EventType.APPLICATION_REACTIVATION_REQUESTED,
+        actor=f"user:{user.user_id}",
+        subject_type="application_reactivation_request",
+        subject_id=reactivation.application_reactivation_request_id,
+        organization_id=user.organization_id,
+        payload={
+            "approval_id": approval.approval_id,
+            "application_id": application.application_id,
+            "candidate_id": application.candidate_id,
+            "terminal_status": application_status,
+            "target_stage_id": req.target_stage_id,
+            "target_stage_name": req.target_stage_name,
+        },
+        correlation_id=reactivation.application_reactivation_request_id,
+    ))
+    await world.record_activity(ActivityRecord(
+        organization_id=user.organization_id,
+        entity_type="application",
+        entity_id=application.application_id,
+        event_type="application.reactivation_requested",
+        actor_user_id=user.user_id,
+        payload={
+            "application_reactivation_request_id": reactivation.application_reactivation_request_id,
+            "approval_id": approval.approval_id,
+            "terminal_status": application_status,
+            "target_stage_id": req.target_stage_id,
+            "target_stage_name": req.target_stage_name,
+        },
+        correlation_id=reactivation.application_reactivation_request_id,
+    ))
+    response = reactivation.model_dump()
+    response["approval"] = approval.model_dump()
+    return response
 
 
 class TalentPoolCreateRequest(BaseModel):
@@ -2390,8 +2521,11 @@ async def decide_approval(
         raise HTTPException(404, "approval not found")
     if getattr(approval, "status", None) != "pending":
         raise HTTPException(status_code=409, detail="This approval has already been decided")
-    if getattr(approval, "subject_type", None) == "hiring_decision" and getattr(approval, "requested_by", None) == user.user_id:
-        raise HTTPException(status_code=403, detail="A requester cannot approve or deny their own hiring decision")
+    if (
+        getattr(approval, "subject_type", None) in {"hiring_decision", "application_reactivation_request"}
+        and getattr(approval, "requested_by", None) == user.user_id
+    ):
+        raise HTTPException(status_code=403, detail="A requester cannot approve or deny their own governed application outcome")
     if getattr(approval, "subject_type", None) == "hiring_decision" and req.decision == "granted":
         decision = await world.get_hiring_decision(user.organization_id, approval.subject_id)
         if not decision or decision.approval_id != approval.approval_id:
@@ -2399,6 +2533,20 @@ async def decide_approval(
         application = await world.get_application(user.organization_id, decision.application_id)
         if not application or getattr(application.status, "value", application.status) != "active":
             raise HTTPException(status_code=409, detail="The target application is no longer active; hiring decision approval cannot proceed")
+    if getattr(approval, "subject_type", None) == "application_reactivation_request" and req.decision == "granted":
+        reactivation = await world.get_application_reactivation_request(user.organization_id, approval.subject_id)
+        if not reactivation or reactivation.approval_id != approval.approval_id:
+            raise HTTPException(404, "application reactivation request not found")
+        application = await world.get_application(user.organization_id, reactivation.application_id)
+        application_status = getattr(application.status, "value", application.status) if application else None
+        if not application or application_status != reactivation.terminal_status:
+            raise HTTPException(
+                status_code=409,
+                detail="The target application no longer has the terminal outcome recorded for reactivation",
+            )
+        await _validate_application_reactivation_target(
+            application, reactivation.target_stage_id, reactivation.target_stage_name
+        )
     if approval.context.get("capability_id") in RETENTION_EXECUTION_CAPABILITIES:
         _require_role(user, Role.ADMIN)
     a = await governance.decide_approval(approval_id, req.decision, user.user_id, req.note)
@@ -2463,6 +2611,75 @@ async def decide_approval(
                 actor_user_id=user.user_id,
             )
         response["hiring_decision"] = resolved.model_dump()
+    if getattr(a, "subject_type", None) == "application_reactivation_request":
+        reactivation = await world.get_application_reactivation_request(user.organization_id, a.subject_id)
+        if not reactivation or reactivation.approval_id != a.approval_id:
+            raise HTTPException(404, "application reactivation request not found")
+        application = None
+        if a.status == "granted":
+            application = await world.apply_application_reactivation(
+                user.organization_id,
+                reactivation,
+                approval_id=a.approval_id,
+                resolved_by_user_id=user.user_id,
+            )
+            if not application:
+                response["application_reactivation_request"] = reactivation.model_dump()
+                response["application_reactivation_error"] = (
+                    "The application changed during approval. The reactivation request remains awaiting approval and no correction was applied."
+                )
+                return response
+        resolution_status = "effective" if a.status == "granted" else "denied"
+        resolved = await world.resolve_application_reactivation_request(
+            user.organization_id,
+            reactivation.application_reactivation_request_id,
+            approval_id=a.approval_id,
+            status=resolution_status,
+            resolved_by_user_id=user.user_id,
+        )
+        if not resolved:
+            raise HTTPException(404, "application reactivation request not found")
+        await governance.emit(DomainEvent(
+            event_type=(
+                EventType.APPLICATION_REACTIVATION_EFFECTIVE
+                if a.status == "granted"
+                else EventType.APPLICATION_REACTIVATION_DENIED
+            ),
+            actor=f"user:{user.user_id}",
+            subject_type="application_reactivation_request",
+            subject_id=resolved.application_reactivation_request_id,
+            organization_id=user.organization_id,
+            payload={
+                "approval_id": a.approval_id,
+                "application_id": resolved.application_id,
+                "candidate_id": resolved.candidate_id,
+                "terminal_status": resolved.terminal_status,
+                "target_stage_id": resolved.target_stage_id,
+                "target_stage_name": resolved.target_stage_name,
+                "application_status": getattr(application.status, "value", application.status) if application else None,
+            },
+            correlation_id=resolved.application_reactivation_request_id,
+        ))
+        await world.record_activity(ActivityRecord(
+            organization_id=user.organization_id,
+            entity_type="application",
+            entity_id=resolved.application_id,
+            event_type=(
+                "application.reactivation_effective"
+                if a.status == "granted"
+                else "application.reactivation_denied"
+            ),
+            actor_user_id=user.user_id,
+            payload={
+                "application_reactivation_request_id": resolved.application_reactivation_request_id,
+                "approval_id": a.approval_id,
+                "terminal_status": resolved.terminal_status,
+                "target_stage_id": resolved.target_stage_id,
+                "target_stage_name": resolved.target_stage_name,
+            },
+            correlation_id=resolved.application_reactivation_request_id,
+        ))
+        response["application_reactivation_request"] = resolved.model_dump()
     return response
 
 

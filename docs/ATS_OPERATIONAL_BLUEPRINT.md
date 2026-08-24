@@ -21,6 +21,8 @@ EAROS will treat a **requisition** as the approved operating container for hirin
 
 The recruiter workbench will provide separate but connected views: **My work**, **Requisitions**, **Pipeline**, **Candidate CRM**, **Interviews**, **Offers**, and **Reporting**. Pipeline controls will support stage movement, filter/search, bulk review, disqualification, withdrawal, restore, assignment, source review, and timeline access. Every move will write a stage-history record with acting user, source stage, target stage, timestamp, reason, and supporting notes. Terminal outcomes preserve the independent decision gate.
 
+> **Terminal correction rule.** An approved `Hired` or `Rejected` outcome cannot be reversed through ordinary stage movement. EAROS records a separate tenant-scoped reactivation request with the target active stage and evidence-based rationale. Its requester cannot decide it. Only an independent governance grant reactivates the application, preserves the original hiring decision, appends the approval and correction identifiers to stage history, and emits dedicated request/effective/denied events and activity records.
+
 ## Interview and decision operations
 
 Interview plans associate stages with an interview type, duration, timezone, interviewer roles, interview kit, focus competencies, and scorecard. Recruiters can coordinate records and reminders, while a calendar/video provider remains configured-but-inactive until supplied. Feedback is independently authored, has completion visibility, and drives a debrief packet. Offer packages remain internal drafts with version history, approval route, compensation components, and candidate-response record; an accepted handoff is limited to downstream routing metadata.

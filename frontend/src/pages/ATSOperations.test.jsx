@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { COLLABORATION_GUARDRAILS, HIRING_DECISION_GUARDRAILS, HIRING_PLAN_GUARDRAILS, OPERATIONAL_REQUISITION_GUARDRAILS, OFFER_GUARDRAILS, TABS, formatDate } from "./ATSOperations";
+import { APPLICATION_REACTIVATION_GUARDRAILS, COLLABORATION_GUARDRAILS, HIRING_DECISION_GUARDRAILS, HIRING_PLAN_GUARDRAILS, OPERATIONAL_REQUISITION_GUARDRAILS, OFFER_GUARDRAILS, TABS, formatDate } from "./ATSOperations";
 import { AUTONOMY_GUARDRAILS, WORKFLOW_DEFINITIONS } from "./ATSAutonomy";
 import { CONTROL_PANELS, canManageEnterpriseControls } from "./EnterpriseControls";
 import { CAREER_SITE_GUARDRAILS } from "./CareerSite";
@@ -48,6 +48,14 @@ describe("ATS Operations route contract", () => {
       "final_outcomes_enter_governance_approval_queue",
       "requester_cannot_approve_or_deny_own_decision",
       "application_status_changes_only_after_independent_grant",
+    ]);
+  });
+
+  it("keeps terminal application corrections separate from ordinary stage movement", () => {
+    expect(APPLICATION_REACTIVATION_GUARDRAILS).toEqual([
+      "terminal_hire_and_reject_outcomes_are_never_reversed_by_stage_move",
+      "reactivation_requires_a_separate_independent_governance_approval",
+      "approved_reactivation_appends_terminal_correction_provenance",
     ]);
   });
 

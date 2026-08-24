@@ -28,6 +28,7 @@ from foundation import (
     Sensitivity,
     new_activity_id,
     new_application_id,
+    new_application_reactivation_request_id,
     new_candidate_id,
     new_candidate_tag_id,
     new_candidate_notification_delivery_id,
@@ -349,6 +350,31 @@ class HiringDecision(BaseModel):
     rationale: str = Field(min_length=10, max_length=10_000)
     disposition_reason_code: Optional[str] = None
     disposition_reason_label: Optional[str] = None
+    requested_by_user_id: str
+    approval_id: Optional[str] = None
+    status: str = "awaiting_approval"  # awaiting_approval | effective | denied
+    resolved_by_user_id: Optional[str] = None
+    resolved_at: Optional[str] = None
+    created_at: str = Field(default_factory=utcnow_iso)
+    updated_at: str = Field(default_factory=utcnow_iso)
+
+
+class ApplicationReactivationRequest(BaseModel):
+    """A governed correction that returns a terminal hire/reject application to an active stage.
+
+    The originating hiring decision is never changed. A distinct independent approval
+    must become effective before the application may be made active again.
+    """
+    model_config = ConfigDict(extra="ignore")
+    application_reactivation_request_id: str = Field(default_factory=new_application_reactivation_request_id)
+    organization_id: str
+    application_id: str
+    candidate_id: str
+    requisition_id: Optional[str] = None
+    terminal_status: str = Field(pattern="^(hired|rejected)$")
+    target_stage_id: Optional[str] = None
+    target_stage_name: str = Field(min_length=1, max_length=120)
+    rationale: str = Field(min_length=10, max_length=10_000)
     requested_by_user_id: str
     approval_id: Optional[str] = None
     status: str = "awaiting_approval"  # awaiting_approval | effective | denied
@@ -1130,14 +1156,126 @@ class WorldState:
         self, organization_id: str, decision: HiringDecision
     ) -> Optional[Application]:
         status = ApplicationStatus.HIRED if decision.outcome == "hire" else ApplicationStatus.REJECTED
+        terminal_stage_name = "Hired" if decision.outcome == "hire" else "Rejected"
         now = utcnow_iso()
         result = await self.db.applications.update_one(
             {"organization_id": organization_id, "application_id": decision.application_id, "status": ApplicationStatus.ACTIVE.value},
-            {"$set": {"status": status.value, "updated_at": now}, "$push": {"stage_history": {"stage_name": "Hired" if decision.outcome == "hire" else "Rejected", "changed_at": now, "reason": "approved_hiring_decision", "hiring_decision_id": decision.hiring_decision_id}}},
+            {"$set": {"status": status.value, "current_stage_id": None, "current_stage_name": terminal_stage_name, "updated_at": now}, "$push": {"stage_history": {"stage_name": terminal_stage_name, "changed_at": now, "reason": "approved_hiring_decision", "hiring_decision_id": decision.hiring_decision_id}}},
         )
         if result.matched_count != 1:
             return None
         return await self.get_application(organization_id, decision.application_id)
+
+    # governed terminal application corrections; source hiring decisions remain immutable
+    async def create_application_reactivation_request(
+        self, request: ApplicationReactivationRequest
+    ) -> ApplicationReactivationRequest:
+        await self.db.application_reactivation_requests.insert_one(request.model_dump())
+        return request
+
+    async def get_application_reactivation_request(
+        self, organization_id: str, application_reactivation_request_id: str
+    ) -> Optional[ApplicationReactivationRequest]:
+        doc = await self.db.application_reactivation_requests.find_one(
+            {
+                "organization_id": organization_id,
+                "application_reactivation_request_id": application_reactivation_request_id,
+            },
+            {"_id": 0},
+        )
+        return ApplicationReactivationRequest(**doc) if doc else None
+
+    async def list_application_reactivation_requests(
+        self,
+        organization_id: str,
+        *,
+        application_id: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> list[ApplicationReactivationRequest]:
+        query: dict[str, Any] = {"organization_id": organization_id}
+        if application_id:
+            query["application_id"] = application_id
+        if status:
+            query["status"] = status
+        docs = await self.db.application_reactivation_requests.find(
+            query, {"_id": 0}
+        ).sort("created_at", -1).to_list(1000)
+        return [ApplicationReactivationRequest(**doc) for doc in docs]
+
+    async def resolve_application_reactivation_request(
+        self,
+        organization_id: str,
+        application_reactivation_request_id: str,
+        *,
+        approval_id: str,
+        status: str,
+        resolved_by_user_id: str,
+    ) -> Optional[ApplicationReactivationRequest]:
+        now = utcnow_iso()
+        result = await self.db.application_reactivation_requests.update_one(
+            {
+                "organization_id": organization_id,
+                "application_reactivation_request_id": application_reactivation_request_id,
+                "approval_id": approval_id,
+                "status": "awaiting_approval",
+            },
+            {
+                "$set": {
+                    "status": status,
+                    "resolved_by_user_id": resolved_by_user_id,
+                    "resolved_at": now,
+                    "updated_at": now,
+                }
+            },
+        )
+        if result.matched_count != 1:
+            return await self.get_application_reactivation_request(
+                organization_id, application_reactivation_request_id
+            )
+        return await self.get_application_reactivation_request(
+            organization_id, application_reactivation_request_id
+        )
+
+    async def apply_application_reactivation(
+        self,
+        organization_id: str,
+        request: ApplicationReactivationRequest,
+        *,
+        approval_id: str,
+        resolved_by_user_id: str,
+    ) -> Optional[Application]:
+        """Make only the still-terminal target active and append durable correction provenance."""
+        now = utcnow_iso()
+        result = await self.db.applications.update_one(
+            {
+                "organization_id": organization_id,
+                "application_id": request.application_id,
+                "status": request.terminal_status,
+            },
+            {
+                "$set": {
+                    "status": ApplicationStatus.ACTIVE.value,
+                    "current_stage_id": request.target_stage_id,
+                    "current_stage_name": request.target_stage_name,
+                    "updated_at": now,
+                },
+                "$push": {
+                    "stage_history": {
+                        "stage_id": request.target_stage_id,
+                        "stage_name": request.target_stage_name,
+                        "changed_at": now,
+                        "actor_user_id": resolved_by_user_id,
+                        "reason": "approved_application_reactivation",
+                        "application_reactivation_request_id": request.application_reactivation_request_id,
+                        "approval_id": approval_id,
+                        "from_terminal_status": request.terminal_status,
+                    }
+                },
+            },
+        )
+        if result.matched_count != 1:
+            return None
+        return await self.get_application(organization_id, request.application_id)
 
     # candidate relationship management
     async def upsert_talent_pool(self, pool: TalentPool) -> TalentPool:
