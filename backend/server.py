@@ -100,6 +100,7 @@ from platform_core.world import (
     ApplicationReactivationRequest,
     AuditExportManifest,
     Candidate,
+    CandidateExperienceFeedback,
     CandidateNotificationDelivery,
     CandidateTag,
     CandidateCommunication,
@@ -1121,6 +1122,13 @@ class CareerSiteApplicationWithdrawalRequest(BaseModel):
     reason: Optional[str] = Field(default=None, max_length=1000)
 
 
+class CareerSiteCandidateExperienceFeedbackRequest(BaseModel):
+    """Public process feedback authorized by the submission-time reference and never used to decide candidacy."""
+    withdrawal_reference: str = Field(min_length=32, max_length=256)
+    rating: int = Field(ge=1, le=5)
+    feedback: Optional[str] = Field(default=None, max_length=10_000)
+
+
 class ReferralIntakeRequest(BaseModel):
     full_name: str = Field(min_length=2, max_length=200)
     email: Optional[str] = Field(default=None, max_length=320)
@@ -1792,6 +1800,56 @@ async def withdraw_career_site_application(
         payload={"candidate_id": application.candidate_id, "requisition_id": application.requisition_id},
     ))
     return {"application_id": application.application_id, "status": "withdrawn", "withdrawn_at": application.withdrawn_at}
+
+
+@app.post("/api/public/ats/applications/{application_id}/experience-feedback", status_code=201)
+async def record_career_site_candidate_experience_feedback(
+    application_id: str, req: CareerSiteCandidateExperienceFeedbackRequest
+):
+    """Accept one private process-feedback record without returning application, candidate, or hiring data."""
+    application = await world.get_application_by_id(application_id)
+    reference_hash = _withdrawal_reference_hash(req.withdrawal_reference)
+    if not application or not application.withdrawal_token_hash or not hmac.compare_digest(
+        application.withdrawal_token_hash, reference_hash
+    ):
+        raise HTTPException(status_code=404, detail="Application feedback reference is not available")
+    existing = await world.get_candidate_experience_feedback_for_application(
+        application.organization_id, application.application_id
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail="Candidate experience feedback has already been recorded for this application")
+    feedback = await world.record_candidate_experience_feedback(CandidateExperienceFeedback(
+        organization_id=application.organization_id,
+        application_id=application.application_id,
+        candidate_id=application.candidate_id,
+        rating=req.rating,
+        feedback=req.feedback.strip() if req.feedback else None,
+    ))
+    await governance.emit(DomainEvent(
+        event_type=EventType.CANDIDATE_EXPERIENCE_FEEDBACK_RECORDED,
+        actor="public:candidate_experience_feedback",
+        subject_type="candidate_experience_feedback",
+        subject_id=feedback.candidate_experience_feedback_id,
+        organization_id=application.organization_id,
+        payload={"application_id": application.application_id, "candidate_id": application.candidate_id, "rating": feedback.rating},
+        correlation_id=feedback.candidate_experience_feedback_id,
+    ))
+    await world.record_activity(ActivityRecord(
+        organization_id=application.organization_id,
+        entity_type="candidate",
+        entity_id=application.candidate_id,
+        event_type="candidate_experience_feedback.recorded",
+        actor_user_id=None,
+        payload={"application_id": application.application_id, "rating": feedback.rating},
+        correlation_id=feedback.candidate_experience_feedback_id,
+    ))
+    return {"status": "feedback_received", "received_at": feedback.submitted_at}
+
+
+@app.get("/api/ats/candidate-experience-feedback")
+async def list_ats_candidate_experience_feedback(user: AppUser = Depends(_current_user)):
+    _require_role(user, Role.ADMIN, Role.RECRUITER, Role.HIRING_MANAGER)
+    return [feedback.model_dump() for feedback in await world.list_candidate_experience_feedback(user.organization_id)]
 
 
 @app.post("/api/ats/requisitions/{requisition_id}/referrals", status_code=201)

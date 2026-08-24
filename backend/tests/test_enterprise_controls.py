@@ -1500,6 +1500,54 @@ def test_career_site_withdrawal_rejects_invalid_private_reference_without_mutati
     assert application.status is server.ApplicationStatus.ACTIVE
 
 
+def test_candidate_experience_feedback_requires_submission_reference_and_never_mutates_application(monkeypatch):
+    reference = "f" * 48
+    application = server.Application(
+        organization_id="org_alpha", application_id="app_alpha", candidate_id="cand_alpha",
+        current_stage_name="Interview", withdrawal_token_hash=server._withdrawal_reference_hash(reference),
+    )
+    calls = []
+
+    class _World:
+        async def get_application_by_id(self, application_id):
+            return application if application_id == "app_alpha" else None
+
+        async def get_candidate_experience_feedback_for_application(self, *_args):
+            return None
+
+        async def record_candidate_experience_feedback(self, feedback):
+            calls.append(("feedback", feedback.organization_id, feedback.application_id, feedback.rating))
+            return feedback
+
+        async def record_activity(self, activity):
+            calls.append(("activity", activity.event_type, activity.entity_id, activity.payload["rating"]))
+            return activity
+
+    class _Governance:
+        async def emit(self, event):
+            calls.append(("event", event.event_type.value, event.subject_id, event.payload["rating"]))
+            return event
+
+    monkeypatch.setattr(server, "world", _World())
+    monkeypatch.setattr(server, "governance", _Governance())
+    result = asyncio.run(server.record_career_site_candidate_experience_feedback(
+        "app_alpha", server.CareerSiteCandidateExperienceFeedbackRequest(
+            withdrawal_reference=reference, rating=4, feedback="The scheduling instructions were clear and respectful."
+        )
+    ))
+    assert result["status"] == "feedback_received"
+    assert application.status is server.ApplicationStatus.ACTIVE
+    assert application.current_stage_name == "Interview"
+    assert ("feedback", "org_alpha", "app_alpha", 4) in calls
+    assert any(call[0] == "event" and call[1] == "world.candidate_experience_feedback.recorded" for call in calls)
+
+    with pytest.raises(HTTPException) as invalid_reference:
+        asyncio.run(server.record_career_site_candidate_experience_feedback(
+            "app_alpha", server.CareerSiteCandidateExperienceFeedbackRequest(withdrawal_reference="x" * 48, rating=5)
+        ))
+    assert invalid_reference.value.status_code == 404
+
+
 def test_referral_intake_requires_enabled_requisition_and_validates_referrer(monkeypatch):
     calls = []
     requisition = server.Requisition(

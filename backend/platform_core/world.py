@@ -30,6 +30,7 @@ from foundation import (
     new_application_id,
     new_application_reactivation_request_id,
     new_candidate_id,
+    new_candidate_experience_feedback_id,
     new_candidate_tag_id,
     new_candidate_notification_delivery_id,
     new_communication_id,
@@ -386,6 +387,18 @@ class ApplicationReactivationRequest(BaseModel):
     resolved_at: Optional[str] = None
     created_at: str = Field(default_factory=utcnow_iso)
     updated_at: str = Field(default_factory=utcnow_iso)
+
+
+class CandidateExperienceFeedback(BaseModel):
+    """Candidate-submitted process feedback; it never changes or automatically informs a hiring decision."""
+    model_config = ConfigDict(extra="ignore")
+    candidate_experience_feedback_id: str = Field(default_factory=new_candidate_experience_feedback_id)
+    organization_id: str
+    application_id: str
+    candidate_id: str
+    rating: int = Field(ge=1, le=5)
+    feedback: Optional[str] = Field(default=None, max_length=10_000)
+    submitted_at: str = Field(default_factory=utcnow_iso)
 
 
 class TalentPool(BaseModel):
@@ -1112,6 +1125,24 @@ class WorldState:
         """Lookup is reserved for public token validation; callers must not expose the result before verification."""
         doc = await self.db.applications.find_one({"application_id": application_id}, {"_id": 0})
         return Application(**doc) if doc else None
+
+    async def record_candidate_experience_feedback(self, feedback: CandidateExperienceFeedback) -> CandidateExperienceFeedback:
+        await self.db.candidate_experience_feedback.insert_one(feedback.model_dump())
+        return feedback
+
+    async def get_candidate_experience_feedback_for_application(
+        self, organization_id: str, application_id: str
+    ) -> Optional[CandidateExperienceFeedback]:
+        doc = await self.db.candidate_experience_feedback.find_one(
+            {"organization_id": organization_id, "application_id": application_id}, {"_id": 0}
+        )
+        return CandidateExperienceFeedback(**doc) if doc else None
+
+    async def list_candidate_experience_feedback(self, organization_id: str) -> list[CandidateExperienceFeedback]:
+        docs = await self.db.candidate_experience_feedback.find(
+            {"organization_id": organization_id}, {"_id": 0}
+        ).sort("submitted_at", -1).to_list(2000)
+        return [CandidateExperienceFeedback(**doc) for doc in docs]
 
     async def list_applications(
         self,

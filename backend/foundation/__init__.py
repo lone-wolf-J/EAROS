@@ -41,6 +41,7 @@ def new_mention_id() -> str: return _new_id("mention")
 def new_communication_id() -> str: return _new_id("comm")
 def new_hiring_decision_id() -> str: return _new_id("hiredec")
 def new_application_reactivation_request_id() -> str: return _new_id("appreact")
+def new_candidate_experience_feedback_id() -> str: return _new_id("candxp")
 def new_offer_id() -> str: return _new_id("offer")
 def new_offer_version_id() -> str: return _new_id("offerver")
 def new_offer_extension_request_id() -> str: return _new_id("offerext")
@@ -267,6 +268,7 @@ class EventType(str, Enum):
     ONBOARDING_HANDOFF_UPDATED = "world.onboarding_handoff.updated"
     APPLICATION_QUESTIONS_CONFIGURED = "world.application_questions.configured"
     APPLICATION_RESPONSES_CAPTURED = "world.application_responses.captured"
+    CANDIDATE_EXPERIENCE_FEEDBACK_RECORDED = "world.candidate_experience_feedback.recorded"
     DISPOSITION_REASON_CONFIGURED = "world.disposition_reason.configured"
     COMMUNICATION_TEMPLATE_CREATED = "world.communication_template.created"
     # Reflection

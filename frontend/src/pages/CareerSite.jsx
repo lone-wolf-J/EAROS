@@ -9,6 +9,7 @@ export const CAREER_SITE_GUARDRAILS = [
   "candidate_and_application_records_use_canonical_ats_models",
   "requisition_configured_questions_are_validated_and_stored_canonically",
   "candidate_withdrawal_requires_a_one_time_reference_and_preserves_application_provenance",
+  "candidate_experience_feedback_requires_the_private_submission_reference_and_never_changes_hiring_state",
   "submission_never_triggers_outbound_automation",
 ];
 
@@ -27,6 +28,10 @@ export default function CareerSite() {
   const [withdrawalError, setWithdrawalError] = useState("");
   const [withdrawalResult, setWithdrawalResult] = useState(null);
   const [withdrawing, setWithdrawing] = useState(false);
+  const [experienceFeedback, setExperienceFeedback] = useState({ applicationId: "", withdrawalReference: "", rating: "5", feedback: "" });
+  const [experienceFeedbackError, setExperienceFeedbackError] = useState("");
+  const [experienceFeedbackResult, setExperienceFeedbackResult] = useState(null);
+  const [submittingExperienceFeedback, setSubmittingExperienceFeedback] = useState(false);
   const [answers, setAnswers] = useState({});
   const [form, setForm] = useState({
     requisitionId: "",
@@ -99,6 +104,7 @@ export default function CareerSite() {
       });
       setSubmitted(data);
       setWithdrawal((previous) => ({ ...previous, applicationId: data.application_id, withdrawalReference: data.withdrawal_reference || "" }));
+      setExperienceFeedback((previous) => ({ ...previous, applicationId: data.application_id, withdrawalReference: data.withdrawal_reference || "" }));
     } catch (error) {
       const detail = error?.response?.data?.detail;
       setSubmitError(typeof detail === "string" ? detail : "Your application could not be recorded. Please verify the role is still open and try again.");
@@ -127,6 +133,30 @@ export default function CareerSite() {
       setWithdrawalError(typeof detail === "string" ? detail : "This application could not be withdrawn. Verify both references and try again.");
     } finally {
       setWithdrawing(false);
+    }
+  };
+
+  const submitExperienceFeedback = async (event) => {
+    event.preventDefault();
+    setExperienceFeedbackError("");
+    setExperienceFeedbackResult(null);
+    if (!experienceFeedback.applicationId || !experienceFeedback.withdrawalReference) {
+      setExperienceFeedbackError("Enter the application reference and the private reference shown at submission.");
+      return;
+    }
+    setSubmittingExperienceFeedback(true);
+    try {
+      const { data } = await api.post(`/public/ats/applications/${encodeURIComponent(experienceFeedback.applicationId)}/experience-feedback`, {
+        withdrawal_reference: experienceFeedback.withdrawalReference,
+        rating: Number(experienceFeedback.rating),
+        feedback: experienceFeedback.feedback || null,
+      });
+      setExperienceFeedbackResult(data);
+    } catch (error) {
+      const detail = error?.response?.data?.detail;
+      setExperienceFeedbackError(typeof detail === "string" ? detail : "Your experience feedback could not be recorded. Verify both references and try again.");
+    } finally {
+      setSubmittingExperienceFeedback(false);
     }
   };
 
@@ -183,6 +213,19 @@ export default function CareerSite() {
               <label className="block space-y-1.5"><span className="font-mono2 text-[10px] tracking-widest text-slate-400">OPTIONAL NOTE</span><textarea className={inputClass} value={withdrawal.reason} onChange={(event) => setWithdrawal((previous) => ({ ...previous, reason: event.target.value }))} /></label>
               {withdrawalError && <p className="rounded-sm border border-rose-500/25 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{withdrawalError}</p>}
               <button type="submit" disabled={withdrawing} className="rounded-sm border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-200 transition hover:border-teal-400 hover:text-teal-200 disabled:cursor-not-allowed disabled:opacity-50">{withdrawing ? "Withdrawing application…" : "Withdraw application"}</button>
+            </form>}
+          </section>
+          <section className="mt-7 border-t border-slate-800 pt-6" aria-labelledby="experience-feedback-title">
+            <div className="font-mono2 text-[10px] tracking-[0.18em] text-teal-300">CANDIDATE EXPERIENCE</div>
+            <h3 id="experience-feedback-title" className="mt-1 font-display text-lg font-black text-slate-100">Share process feedback</h3>
+            <p className="mt-1 text-sm leading-6 text-slate-400">Optional feedback is stored as a private process record for the organization. It does not reveal application status, contact you, or change any hiring decision.</p>
+            {experienceFeedbackResult ? <p data-testid="career-site-experience-feedback-confirmation" className="mt-3 rounded-sm border border-emerald-400/25 bg-emerald-400/10 px-3 py-2 text-sm text-emerald-100">Thank you. Your experience feedback was recorded.</p> : <form className="mt-4 space-y-3" onSubmit={submitExperienceFeedback}>
+              <label className="block space-y-1.5"><span className="font-mono2 text-[10px] tracking-widest text-slate-400">APPLICATION REFERENCE</span><input className={inputClass} value={experienceFeedback.applicationId} onChange={(event) => setExperienceFeedback((previous) => ({ ...previous, applicationId: event.target.value }))} required /></label>
+              <label className="block space-y-1.5"><span className="font-mono2 text-[10px] tracking-widest text-slate-400">PRIVATE SUBMISSION REFERENCE</span><input className={inputClass} type="password" autoComplete="off" value={experienceFeedback.withdrawalReference} onChange={(event) => setExperienceFeedback((previous) => ({ ...previous, withdrawalReference: event.target.value }))} required /></label>
+              <label className="block space-y-1.5"><span className="font-mono2 text-[10px] tracking-widest text-slate-400">PROCESS RATING</span><select className={inputClass} value={experienceFeedback.rating} onChange={(event) => setExperienceFeedback((previous) => ({ ...previous, rating: event.target.value }))}>{[5, 4, 3, 2, 1].map((rating) => <option key={rating} value={rating}>{rating} / 5</option>)}</select></label>
+              <label className="block space-y-1.5"><span className="font-mono2 text-[10px] tracking-widest text-slate-400">OPTIONAL FEEDBACK</span><textarea className={inputClass} value={experienceFeedback.feedback} onChange={(event) => setExperienceFeedback((previous) => ({ ...previous, feedback: event.target.value }))} /></label>
+              {experienceFeedbackError && <p className="rounded-sm border border-rose-500/25 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{experienceFeedbackError}</p>}
+              <button type="submit" disabled={submittingExperienceFeedback} className="rounded-sm border border-teal-400/35 bg-teal-400/10 px-4 py-2 text-sm font-semibold text-teal-100 transition hover:bg-teal-400/20 disabled:cursor-not-allowed disabled:opacity-50">{submittingExperienceFeedback ? "Recording feedback…" : "Record feedback"}</button>
             </form>}
           </section>
         </section>

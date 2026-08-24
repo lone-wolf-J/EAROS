@@ -130,6 +130,7 @@ describe("ATS Operations route contract", () => {
       "candidate_and_application_records_use_canonical_ats_models",
       "requisition_configured_questions_are_validated_and_stored_canonically",
       "candidate_withdrawal_requires_a_one_time_reference_and_preserves_application_provenance",
+      "candidate_experience_feedback_requires_the_private_submission_reference_and_never_changes_hiring_state",
       "submission_never_triggers_outbound_automation",
     ]);
   });
