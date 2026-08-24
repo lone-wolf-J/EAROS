@@ -377,10 +377,10 @@ export default function ATSOperations() {
                 <div className="divide-y divide-slate-800 overflow-hidden rounded-sm border border-slate-800">
                   {requisitions.map((requisition) => (
                     <div key={requisition.requisition_id} className="grid gap-3 bg-slate-950/40 px-4 py-4 transition hover:bg-slate-800/30 md:grid-cols-[1.8fr_0.6fr_0.7fr_auto] md:items-center">
-                      <div><div className="font-semibold text-slate-100">{requisition.title}</div><div className="mt-1 font-mono2 text-[10px] text-slate-500">{requisition.requisition_id} · {requisition.location || "Location pending"}</div></div>
+                      <div><div className="font-semibold text-slate-100">{requisition.title}</div><div className="mt-1 font-mono2 text-[10px] text-slate-500">{requisition.requisition_code || requisition.requisition_id} · {requisition.location || "Location pending"} · {(requisition.work_arrangement || "onsite").replaceAll("_", " ")}</div><div className="mt-2 flex flex-wrap gap-1"><span className="rounded-sm border border-slate-700 px-1.5 py-0.5 font-mono2 text-[9px] text-slate-400">{requisition.employment_type?.replaceAll("_", " ") || "employment pending"}</span><span className="rounded-sm border border-slate-700 px-1.5 py-0.5 font-mono2 text-[9px] text-slate-400">PRIORITY · {requisition.priority || "normal"}</span>{requisition.seniority && <span className="rounded-sm border border-slate-700 px-1.5 py-0.5 font-mono2 text-[9px] text-slate-400">{requisition.seniority}</span>}</div></div>
                       <div><div className="font-mono2 text-[10px] text-slate-500">HEADCOUNT</div><div className="text-sm text-slate-200">{requisition.headcount}</div></div>
                       <div><div className="font-mono2 text-[10px] text-slate-500">PIPELINE</div><div className="text-sm text-slate-300">{pipelines.find((pipeline) => pipeline.pipeline_id === requisition.pipeline_id)?.name || "Default"}</div></div>
-                      <Status value={requisition.approval_status} />
+                      <div className="space-y-1 text-right"><Status value={requisition.approval_status} />{requisition.compensation?.salary_min != null && <div className="font-mono2 text-[9px] text-slate-500">{requisition.compensation.currency || "USD"} {Number(requisition.compensation.salary_min).toLocaleString()}–{Number(requisition.compensation.salary_max || requisition.compensation.salary_min).toLocaleString()}</div>}</div>
                     </div>
                   ))}
                 </div>
